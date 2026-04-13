@@ -1,0 +1,21 @@
+{
+  "utc": "2026-03-15T19:31:05Z",
+  "run_name": "opening_aggressive_Square",
+  "total_updates": 1,
+  "total_steps_seen": 16,
+  "total_elapsed_sec": 3.1503801345825195,
+  "final_recent_mean_ep_reward": -3.29,
+  "final_recent_win_rate": 0.0,
+  "episodes_finished": 1,
+  "save_dir": ".",
+  "run_config": {
+    "map_id": "Square",
+    "p1_deck": "player:正方广场",
+    "p2_deck": "MiniGame_Aori",
+    "opening_turns": 3,
+    "bot_style": "aggressive",
+    "bot_level": "high",
+    "seed": 42,
+    "reward_mode": "basic_ppo_after_aggressive_opening"
+  }
+}

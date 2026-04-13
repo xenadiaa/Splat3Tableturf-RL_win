@@ -1,0 +1,11 @@
+[
+  {"id": "default:balanced:low", "kind": "default", "label": "Default Balanced Low", "style": "balanced", "level": "low"},
+  {"id": "default:balanced:mid", "kind": "default", "label": "Default Balanced Mid", "style": "balanced", "level": "mid"},
+  {"id": "default:balanced:high", "kind": "default", "label": "Default Balanced High", "style": "balanced", "level": "high"},
+  {"id": "default:aggressive:low", "kind": "default", "label": "Default Aggressive Low", "style": "aggressive", "level": "low"},
+  {"id": "default:aggressive:mid", "kind": "default", "label": "Default Aggressive Mid", "style": "aggressive", "level": "mid"},
+  {"id": "default:aggressive:high", "kind": "default", "label": "Default Aggressive High", "style": "aggressive", "level": "high"},
+  {"id": "default:conservative:low", "kind": "default", "label": "Default Conservative Low", "style": "conservative", "level": "low"},
+  {"id": "default:conservative:mid", "kind": "default", "label": "Default Conservative Mid", "style": "conservative", "level": "mid"},
+  {"id": "default:conservative:high", "kind": "default", "label": "Default Conservative High", "style": "conservative", "level": "high"}
+]

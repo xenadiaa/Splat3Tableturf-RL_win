@@ -1,0 +1,30 @@
+{
+  "board_roi_norm": [0.485, 0.12, 0.24, 0.82],
+  "card_rois_norm": [
+    [0.0125, 0.164, 0.124, 0.313],
+    [0.141, 0.164, 0.124, 0.313],
+    [0.0125, 0.482, 0.124, 0.313],
+    [0.141, 0.482, 0.124, 0.313]
+  ],
+  "card_grid_hint": [8, 8],
+  "board_palette_bgr": {
+    "invalid": [30, 22, 24],
+    "empty": [22, 14, 16],
+    "p1_fill": [0, 255, 255],
+    "p1_special": [0, 192, 255],
+    "p2_fill": [192, 112, 0],
+    "p2_special": [240, 176, 0],
+    "conflict": [235, 232, 188],
+    "p1_special_activated": [0, 192, 255],
+    "p2_special_activated": [240, 176, 0]
+  },
+  "card_palette_bgr": {
+    "empty": [22, 14, 16],
+    "fill": [24, 240, 232],
+    "special": [245, 224, 45],
+    "conflict": [235, 232, 188],
+    "special_activated": [120, 246, 242]
+  },
+  "line_merge_px": 4,
+  "line_threshold_percentile": 90
+}

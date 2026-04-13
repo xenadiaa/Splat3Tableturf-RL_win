@@ -1,0 +1,20 @@
+{
+  "modes": {
+    "map_to_both_actions": {
+      "enable_exact": true,
+      "enable_fuzzy": false
+    },
+    "map_plus_one_action_to_other": {
+      "enable_exact": true,
+      "enable_fuzzy": false
+    },
+    "both_actions_to_map": {
+      "enable_exact": true,
+      "enable_fuzzy": false
+    },
+    "played_plus_hand_to_deck": {
+      "enable_exact": true,
+      "enable_fuzzy": false
+    }
+  }
+}

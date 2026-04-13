@@ -1,0 +1,932 @@
+[
+  {
+    "npc_id": "MiniGame_MiniGameKurage0",
+    "npc_name": "MiniGameKurage0",
+    "order": 0,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "AccumulateSpecial",
+        "bot_style": "conservative",
+        "bot_level": "low",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Kurage0"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "AccumulateSpecial",
+        "bot_style": "conservative",
+        "bot_level": "mid",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Kurage0"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "AccumulateSpecial",
+        "bot_style": "conservative",
+        "bot_level": "high",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Kurage0"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_MiniGameKurage1",
+    "npc_name": "MiniGameKurage1",
+    "order": 1,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Kurage1"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Kurage1"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Kurage1"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_MiniGameKurage2",
+    "npc_name": "MiniGameKurage2",
+    "order": 2,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "low",
+        "map_id": "Zigzag",
+        "deck_rowid": "MiniGame_Kurage2"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "mid",
+        "map_id": "Zigzag",
+        "deck_rowid": "MiniGame_Kurage2"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "high",
+        "map_id": "Zigzag",
+        "deck_rowid": "MiniGame_Kurage2"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_WeaponShop",
+    "npc_name": "WeaponShop",
+    "order": 3,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "AccumulateSpecial",
+        "bot_style": "conservative",
+        "bot_level": "low",
+        "map_id": "Cross",
+        "deck_rowid": "MiniGame_WeaponShop"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "AccumulateSpecial",
+        "bot_style": "conservative",
+        "bot_level": "mid",
+        "map_id": "Cross",
+        "deck_rowid": "MiniGame_WeaponShop"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "AccumulateSpecial",
+        "bot_style": "conservative",
+        "bot_level": "high",
+        "map_id": "Cross",
+        "deck_rowid": "MiniGame_WeaponShop"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GearShopHead",
+    "npc_name": "GearShopHead",
+    "order": 4,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Zigzag",
+        "deck_rowid": "MiniGame_GearShopHead"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Zigzag",
+        "deck_rowid": "MiniGame_GearShopHead"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Zigzag",
+        "deck_rowid": "MiniGame_GearShopHead"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GearShopClothes",
+    "npc_name": "GearShopClothes",
+    "order": 5,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Square",
+        "deck_rowid": "MiniGame_GearShopClothes"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Square",
+        "deck_rowid": "MiniGame_GearShopClothes"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Square",
+        "deck_rowid": "MiniGame_GearShopClothes"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GearShopShoes",
+    "npc_name": "GearShopShoes",
+    "order": 6,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "low",
+        "map_id": "Square",
+        "deck_rowid": "MiniGame_GearShopShoes"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "mid",
+        "map_id": "Square",
+        "deck_rowid": "MiniGame_GearShopShoes"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "high",
+        "map_id": "Square",
+        "deck_rowid": "MiniGame_GearShopShoes"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GoodsShop",
+    "npc_name": "GoodsShop",
+    "order": 7,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "CenterHole",
+        "deck_rowid": "MiniGame_GoodsShop"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "CenterHole",
+        "deck_rowid": "MiniGame_GoodsShop"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "CenterHole",
+        "deck_rowid": "MiniGame_GoodsShop"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Judge",
+    "npc_name": "Judge",
+    "order": 8,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Cross",
+        "deck_rowid": "MiniGame_Judge"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Cross",
+        "deck_rowid": "MiniGame_Judge"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Cross",
+        "deck_rowid": "MiniGame_Judge"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_JudgeJr",
+    "npc_name": "JudgeJr",
+    "order": 9,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "WDiamond",
+        "deck_rowid": "MiniGame_JudgeJr"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "WDiamond",
+        "deck_rowid": "MiniGame_JudgeJr"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "WDiamond",
+        "deck_rowid": "MiniGame_JudgeJr"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Vendor",
+    "npc_name": "Vendor",
+    "order": 10,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "CenterHole",
+        "deck_rowid": "MiniGame_Vendor"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "CenterHole",
+        "deck_rowid": "MiniGame_Vendor"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "CenterHole",
+        "deck_rowid": "MiniGame_Vendor"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_IdolA",
+    "npc_name": "IdolA",
+    "order": 11,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "low",
+        "map_id": "SShape",
+        "deck_rowid": "MiniGame_Fuka"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "mid",
+        "map_id": "SShape",
+        "deck_rowid": "MiniGame_Fuka"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "high",
+        "map_id": "SShape",
+        "deck_rowid": "MiniGame_Fuka"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_IdolB",
+    "npc_name": "IdolB",
+    "order": 12,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Utsuho"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Utsuho"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Utsuho"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_IdolC",
+    "npc_name": "IdolC",
+    "order": 13,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Zigzag",
+        "deck_rowid": "MiniGame_Mantaro"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Zigzag",
+        "deck_rowid": "MiniGame_Mantaro"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Zigzag",
+        "deck_rowid": "MiniGame_Mantaro"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Mother",
+    "npc_name": "Mother",
+    "order": 14,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "SmallSquare",
+        "deck_rowid": "MiniGame_Mother"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "SmallSquare",
+        "deck_rowid": "MiniGame_Mother"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "SmallSquare",
+        "deck_rowid": "MiniGame_Mother"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Atarime",
+    "npc_name": "Atarime",
+    "order": 15,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Cross",
+        "deck_rowid": "MiniGame_Atarime"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Cross",
+        "deck_rowid": "MiniGame_Atarime"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Cross",
+        "deck_rowid": "MiniGame_Atarime"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Aori",
+    "npc_name": "Aori",
+    "order": 16,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "low",
+        "map_id": "Square",
+        "deck_rowid": "MiniGame_Aori"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "mid",
+        "map_id": "Square",
+        "deck_rowid": "MiniGame_Aori"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "high",
+        "map_id": "Square",
+        "deck_rowid": "MiniGame_Aori"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Hotaru",
+    "npc_name": "Hotaru",
+    "order": 17,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "SShape",
+        "deck_rowid": "MiniGame_Hotaru"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "SShape",
+        "deck_rowid": "MiniGame_Hotaru"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "SShape",
+        "deck_rowid": "MiniGame_Hotaru"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_MiniGameKurage3",
+    "npc_name": "MiniGameKurage3",
+    "order": 18,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Kurage3"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Kurage3"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Rectangle",
+        "deck_rowid": "MiniGame_Kurage3"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_WeaponShop_Fsodr",
+    "npc_name": "WeaponShop_Fsodr",
+    "order": 103,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "WDiamond",
+        "deck_rowid": "MiniGame_WeaponShop_Fsodr"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "WDiamond",
+        "deck_rowid": "MiniGame_WeaponShop_Fsodr"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "WDiamond",
+        "deck_rowid": "MiniGame_WeaponShop_Fsodr"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GearShopHead_Fsodr",
+    "npc_name": "GearShopHead_Fsodr",
+    "order": 104,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "SShape",
+        "deck_rowid": "MiniGame_GearShopHead_Fsodr"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "SShape",
+        "deck_rowid": "MiniGame_GearShopHead_Fsodr"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "SShape",
+        "deck_rowid": "MiniGame_GearShopHead_Fsodr"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GearShopClothes_Fsodr",
+    "npc_name": "GearShopClothes_Fsodr",
+    "order": 105,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "CenterHole",
+        "deck_rowid": "MiniGame_GearShopClothes_Fsodr"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "CenterHole",
+        "deck_rowid": "MiniGame_GearShopClothes_Fsodr"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "CenterHole",
+        "deck_rowid": "MiniGame_GearShopClothes_Fsodr"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GearShopShoes_Fsodr",
+    "npc_name": "GearShopShoes_Fsodr",
+    "order": 106,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "low",
+        "map_id": "SmallSquare",
+        "deck_rowid": "MiniGame_GearShopShoes_Fsodr"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "mid",
+        "map_id": "SmallSquare",
+        "deck_rowid": "MiniGame_GearShopShoes_Fsodr"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "high",
+        "map_id": "SmallSquare",
+        "deck_rowid": "MiniGame_GearShopShoes_Fsodr"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Vendor_Fsodr",
+    "npc_name": "Vendor_Fsodr",
+    "order": 110,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "low",
+        "map_id": "IShape",
+        "deck_rowid": "MiniGame_Vendor_Fsodr"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "mid",
+        "map_id": "IShape",
+        "deck_rowid": "MiniGame_Vendor_Fsodr"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Aggressive",
+        "bot_style": "aggressive",
+        "bot_level": "high",
+        "map_id": "IShape",
+        "deck_rowid": "MiniGame_Vendor_Fsodr"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GearShopHead_Sdodr",
+    "npc_name": "GearShopHead_Sdodr",
+    "order": 200,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Stairs",
+        "deck_rowid": "MiniGame_GearShopHead_Sdodr"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Stairs",
+        "deck_rowid": "MiniGame_GearShopHead_Sdodr"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Stairs",
+        "deck_rowid": "MiniGame_GearShopHead_Sdodr"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GearShopClothes_Sdodr",
+    "npc_name": "GearShopClothes_Sdodr",
+    "order": 201,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Face",
+        "deck_rowid": "MiniGame_GearShopClothes_Sdodr"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Face",
+        "deck_rowid": "MiniGame_GearShopClothes_Sdodr"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Face",
+        "deck_rowid": "MiniGame_GearShopClothes_Sdodr"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_GearShopShoes_Sdodr",
+    "npc_name": "GearShopShoes_Sdodr",
+    "order": 202,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "ManyHole",
+        "deck_rowid": "MiniGame_GearShopShoes_Sdodr"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "ManyHole",
+        "deck_rowid": "MiniGame_GearShopShoes_Sdodr"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "ManyHole",
+        "deck_rowid": "MiniGame_GearShopShoes_Sdodr"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Hime",
+    "npc_name": "Hime",
+    "order": 203,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "ManySp",
+        "deck_rowid": "MiniGame_Hime"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "ManySp",
+        "deck_rowid": "MiniGame_Hime"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "ManySp",
+        "deck_rowid": "MiniGame_Hime"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Iida",
+    "npc_name": "Iida",
+    "order": 204,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Divide",
+        "deck_rowid": "MiniGame_Iida"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Divide",
+        "deck_rowid": "MiniGame_Iida"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Divide",
+        "deck_rowid": "MiniGame_Iida"
+      }
+    ]
+  },
+  {
+    "npc_id": "MiniGame_Mizuta_Sdodr",
+    "npc_name": "Mizuta_Sdodr",
+    "order": 205,
+    "strategies": [
+      {
+        "ai_level": 0,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "low",
+        "map_id": "Painted",
+        "deck_rowid": "MiniGame_Mizuta"
+      },
+      {
+        "ai_level": 1,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "mid",
+        "map_id": "Painted",
+        "deck_rowid": "MiniGame_Mizuta"
+      },
+      {
+        "ai_level": 2,
+        "ai_type": "Balance",
+        "bot_style": "balanced",
+        "bot_level": "high",
+        "map_id": "Painted",
+        "deck_rowid": "MiniGame_Mizuta"
+      }
+    ]
+  }
+]

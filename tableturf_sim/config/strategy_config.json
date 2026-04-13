@@ -1,0 +1,12 @@
+{
+  "auto_battle": {
+    "p1": {
+      "enabled": false,
+      "strategy_id": "nn:SquareP1Auto"
+    },
+    "p2": {
+      "enabled": false,
+      "strategy_id": "default:balanced:mid"
+    }
+  }
+}

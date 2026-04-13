@@ -1,0 +1,10 @@
+{
+  "map_id": "Square",
+  "hand_card_numbers": [1, 12, 20, 33],
+  "p1_sp": 2,
+  "turn": 3,
+  "selected_hand_index": 0,
+  "cursor_xy": [5, 5],
+  "rotation": 0
+}
+

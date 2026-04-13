@@ -1,0 +1,20 @@
+function BoxType CompareSingleBoxFinalResult(CardType Player,CardType Enemy)
+{
+    float PlayerPriority = 30.0 + Player.IsUsingSP - Player.CardCount + Player.IsSpBox; //IsUsingSP + 0.5?  IsSpBox + 30?
+    float EnemyPriority = 30.0 + Enemy.IsUsingSP + Enemy.CardCount + Player.IsSpBox;
+    If ((PlayerPriority - EnemyPriority) < Epision)
+    {
+        return BT_Conflict;//目标为冲突
+    }
+    Else If(PlayerPriority > EnemyPriority)     
+    {
+        return Player.BoxType;//玩家格子类型
+    }
+    Else If(PlayerPriority < EnemyPriority)     
+    {
+        return Enemy.BoxType;//玩家格子类型
+    }
+}
+
+//同优先级的-直接检测冲突
+有优先级差的，低优先级先放，高优先级后放覆盖（sp点覆盖遵循规则）

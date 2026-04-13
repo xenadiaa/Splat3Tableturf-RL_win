@@ -1,0 +1,20 @@
+{
+  "utc": "2026-03-15T18:31:34Z",
+  "run_name": "score_reward_Square",
+  "total_updates": 16,
+  "total_steps_seen": 4096,
+  "total_elapsed_sec": 619.3525049686432,
+  "final_recent_mean_ep_reward": 2.8335,
+  "final_recent_win_rate": 0.04,
+  "episodes_finished": 341,
+  "save_dir": ".",
+  "run_config": {
+    "map_id": "Square",
+    "p1_deck": "player:正方广场",
+    "p2_deck": "MiniGame_Aori",
+    "bot_style": "aggressive",
+    "bot_level": "high",
+    "seed": 42,
+    "reward_mode": "score_0.7_diff_0.25_win_0.05_with_sp_misuse_penalty"
+  }
+}

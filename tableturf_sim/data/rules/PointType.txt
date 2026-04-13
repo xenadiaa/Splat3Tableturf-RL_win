@@ -1,0 +1,12 @@
+enum PointType
+{
+	PT_NotMap = 0;//非地图区域
+	PT_Placeable = 1;//可放置
+	PT_Conflict = 2;//冲突点（灰色）
+	
+	PT_SelfSP = 3;//己方SP点
+	PT_SelfNormal = 4;//己方普通点
+	
+	PT_EnemySP = 5;//敌方SP点
+	PT_EnemyNormal = 6;//敌方普通点
+}

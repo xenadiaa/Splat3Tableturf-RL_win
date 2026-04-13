@@ -1,0 +1,163 @@
+{
+  "default": {
+    "mode": "default",
+    "strategy_id": "default:aggressive:high",
+    "label": "全局默认-激进"
+  },
+  "maps": {
+    "加速高速公路": {
+      "mode": "ppo",
+      "training_summary": "GST_RL/checkpoints_all_maps/ManySp/training_summary.json",
+      "label": "加速高速公路-PPO"
+    },
+    "双子岛": {
+      "mode": "ppo",
+      "checkpoint_dir": "GST_RL/checkpoints_all_maps/WDiamond",
+      "label": "双子岛-PPO"
+    },
+    "小巧竞技场": {
+      "mode": "default",
+      "strategy_id": "default:aggressive:high",
+      "label": "小巧竞技场-激进"
+    },
+    "扭转河": {
+      "mode": "default",
+      "strategy_id": "default:aggressive:high",
+      "label": "扭转河-激进"
+    },
+    "正方广场": {
+      "mode": "ppo",
+      "checkpoint_file": "GST_RL/strategy_tiers/low_granularity/checkpoints/selfplay_2p_dual_square_player_square_vs_aori_deck_20260316/p1_ppo_u0064.pt",
+      "label": "正方广场-PPO",
+      "fallback_strategy_id": "default:aggressive:high",
+      "fallback_label": "正方广场-激进(缺失PPO回退)"
+    },
+    "正直大道": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "正直大道-均衡"
+    },
+    "清脆饼干": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "清脆饼干-均衡"
+    },
+    "漆黑深林": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "漆黑深林-均衡"
+    },
+    "罚分花园": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "罚分花园-均衡"
+    },
+    "轻飘湖": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "轻飘湖-均衡"
+    },
+    "酷似大道": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "酷似大道-均衡"
+    },
+    "钢骨建筑": {
+      "mode": "default",
+      "strategy_id": "default:aggressive:high",
+      "label": "钢骨建筑-激进"
+    },
+    "间隔墙": {
+      "mode": "default",
+      "strategy_id": "default:conservative:high",
+      "label": "间隔墙-保守攒SP"
+    },
+    "雷霆车站": {
+      "mode": "default",
+      "strategy_id": "default:aggressive:high",
+      "label": "雷霆车站-激进"
+    },
+    "面具屋": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "面具屋-均衡"
+    },
+    "ManySp": {
+      "mode": "ppo",
+      "training_summary": "GST_RL/checkpoints_all_maps/ManySp/training_summary.json",
+      "label": "ManySp-PPO"
+    },
+    "WDiamond": {
+      "mode": "ppo",
+      "checkpoint_dir": "GST_RL/checkpoints_all_maps/WDiamond",
+      "label": "WDiamond-PPO"
+    },
+    "SmallSquare": {
+      "mode": "default",
+      "strategy_id": "default:aggressive:high",
+      "label": "SmallSquare-激进"
+    },
+    "SShape": {
+      "mode": "default",
+      "strategy_id": "default:aggressive:high",
+      "label": "SShape-激进"
+    },
+    "Square": {
+      "mode": "ppo",
+      "checkpoint_file": "GST_RL/strategy_tiers/low_granularity/checkpoints/selfplay_2p_dual_square_player_square_vs_aori_deck_20260316/p1_ppo_u0064.pt",
+      "label": "Square-PPO",
+      "fallback_strategy_id": "default:aggressive:high",
+      "fallback_label": "Square-激进(缺失PPO回退)"
+    },
+    "Rectangle": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "Rectangle-均衡"
+    },
+    "Stairs": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "Stairs-均衡"
+    },
+    "ManyHole": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "ManyHole-均衡"
+    },
+    "Cross": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "Cross-均衡"
+    },
+    "CenterHole": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "CenterHole-均衡"
+    },
+    "Divide": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "Divide-均衡"
+    },
+    "IShape": {
+      "mode": "default",
+      "strategy_id": "default:aggressive:high",
+      "label": "IShape-激进"
+    },
+    "Painted": {
+      "mode": "default",
+      "strategy_id": "default:conservative:high",
+      "label": "Painted-保守攒SP"
+    },
+    "Zigzag": {
+      "mode": "default",
+      "strategy_id": "default:aggressive:high",
+      "label": "Zigzag-激进"
+    },
+    "Face": {
+      "mode": "default",
+      "strategy_id": "default:balanced:high",
+      "label": "Face-均衡"
+    }
+  }
+}

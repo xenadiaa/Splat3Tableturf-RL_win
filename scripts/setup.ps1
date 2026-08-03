@@ -32,6 +32,11 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "[setup] install Python 3.10+ and enable Add Python to PATH"
     exit 1
 }
+& $PythonCmd @PythonArgs -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[setup] error: Python 3.10 or newer is required"
+    exit 1
+}
 
 if ((Test-Path $VenvDir) -and -not (Test-Path $VenvPython)) {
     Write-Host "[setup] existing .venv is incomplete or belongs to another operating system; rebuilding it"
@@ -56,6 +61,10 @@ if (-not (Test-Path $VenvPython)) {
 
 Write-Host "[setup] upgrading pip"
 & $VenvPython -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[setup] error: failed to upgrade pip"
+    exit 1
+}
 
 if (-not (Test-Path $ReqFile)) {
     Write-Host "[setup] error: requirements.txt not found"
@@ -64,6 +73,10 @@ if (-not (Test-Path $ReqFile)) {
 
 Write-Host "[setup] installing Python dependencies"
 & $VenvPython -m pip install -r $ReqFile
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[setup] error: failed to install Python dependencies"
+    exit 1
+}
 
 if (-not (Test-Path $ConfigLocal)) {
     if (Test-Path $ConfigExample) {

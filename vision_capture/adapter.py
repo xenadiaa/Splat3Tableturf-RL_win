@@ -5,6 +5,7 @@ import json
 import os
 import re
 import select
+import shutil
 import subprocess
 import threading
 import time
@@ -36,8 +37,47 @@ class VisionAdapter:
         Path(path).write_text(json.dumps(asdict(state), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def resolve_ffmpeg_tool(tool_name: str = "ffmpeg") -> str:
+    """Resolve FFmpeg tools from PATH or the default WinGet install roots."""
+    executable_name = f"{str(tool_name).strip()}.exe" if os.name == "nt" else str(tool_name).strip()
+    resolved = shutil.which(executable_name) or shutil.which(str(tool_name).strip())
+    if resolved:
+        return str(resolved)
+    if os.name != "nt":
+        return ""
+
+    roots: List[Path] = []
+    local_app_data = str(os.environ.get("LOCALAPPDATA", "") or "").strip()
+    if local_app_data:
+        local_root = Path(local_app_data) / "Microsoft" / "WinGet"
+        direct_link = local_root / "Links" / executable_name
+        if direct_link.is_file():
+            return str(direct_link)
+        roots.append(local_root / "Packages")
+
+    program_files = str(os.environ.get("ProgramFiles", "") or "").strip()
+    if program_files:
+        roots.append(Path(program_files) / "WinGet" / "Packages")
+
+    for root in roots:
+        if not root.is_dir():
+            continue
+        with contextlib.suppress(Exception):
+            for package_dir in root.glob("Gyan.FFmpeg*"):
+                for candidate in package_dir.rglob(executable_name):
+                    if candidate.is_file():
+                        return str(candidate)
+    return ""
+
+
 def _list_ffmpeg_video_devices_text() -> str:
-    cmd = ["ffmpeg", "-f", "dshow", "-list_devices", "true", "-i", "dummy"]
+    ffmpeg_executable = resolve_ffmpeg_tool("ffmpeg")
+    if not ffmpeg_executable:
+        raise RuntimeError(
+            "未找到 ffmpeg.exe。请执行 `winget install -e --id Gyan.FFmpeg`，"
+            "安装后重新打开终端或重启 Windows。"
+        )
+    cmd = [ffmpeg_executable, "-f", "dshow", "-list_devices", "true", "-i", "dummy"]
     proc = subprocess.run(cmd, text=True, capture_output=True)
     return (proc.stderr or "") + (proc.stdout or "")
 
@@ -213,8 +253,15 @@ class FFmpegCaptureSource:
             "fps": self.fps,
             "pixel_format": self.pixel_format,
         }
+        ffmpeg_executable = resolve_ffmpeg_tool("ffmpeg")
+        if not ffmpeg_executable:
+            self.last_error = "FFMPEG_NOT_FOUND"
+            raise RuntimeError(
+                "未找到 ffmpeg.exe。请执行 `winget install -e --id Gyan.FFmpeg`，"
+                "安装后重新打开终端或重启 Windows。"
+            )
         cmd = [
-            "ffmpeg",
+            ffmpeg_executable,
             "-hide_banner",
             "-loglevel",
             "error",

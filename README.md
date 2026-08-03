@@ -18,16 +18,62 @@ cd Splat3Tableturf-RL_win
 
 ## 2. 执行安装
 
-需要先安装 Python 3.10+。
+推荐先在 CMD 或 PowerShell 中安装 Python 3.13：
+
+```cmd
+winget install -e --id Python.Python.3.13
+```
+
+安装完成后关闭并重新打开终端，确认 Python 版本：
+
+```cmd
+py -3.13 --version
+py -0p
+```
+
+推荐使用项目安装脚本创建独立虚拟环境并安装全部依赖：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
 
-如果安装过程中提示缺少 `ffmpeg`，请先手动安装后再继续。常见安装方式：
+如果不使用虚拟环境，也可以直接使用 Python 3.13 安装 `requirements.txt`：
+
+```cmd
+py -3.13 -m pip install --upgrade pip
+py -3.13 -m pip install --user -r requirements.txt
+```
+
+如果只运行不需要采集卡的普通 Macro，可以只安装串口依赖：
+
+```cmd
+py -3.13 -m pip install --user pyserial
+```
+
+自动对战和智能 Macro 需要 FFmpeg。推荐使用 WinGet 安装：
+
+```cmd
+winget install -e --id Gyan.FFmpeg
+```
+
+安装完成后需要完全关闭当前 CMD/PowerShell 并重新打开，然后检查：
+
+```cmd
+where ffmpeg
+ffmpeg -version
+```
+
+如果仍然无法识别 `ffmpeg`，先确认软件已经安装：
+
+```cmd
+winget list --id Gyan.FFmpeg
+```
+
+如果能够查到 FFmpeg 但命令仍不可用，请重启 Windows 以刷新 PATH。普通 `macro_gamepad.py` 不使用视频流，因此不需要 FFmpeg 或采集卡。
+
+也可以使用其他包管理器安装：
 
 ```powershell
-winget install Gyan.FFmpeg
 choco install ffmpeg
 scoop install ffmpeg
 conda install -c conda-forge ffmpeg
@@ -35,28 +81,30 @@ conda install -c conda-forge ffmpeg
 
 ## 3. 运行主命令
 
+以下命令统一使用 Windows Python Launcher 的 `py -3.13`，不要求 `.venv` 存在。如果已经通过 `setup.ps1` 成功创建虚拟环境，可以将命令开头的 `py -3.13` 替换为 `.\.venv\Scripts\python.exe`。
+
 自动对战：
 
 ```powershell
-.venv\Scripts\python.exe autocontroller_rebuild_for_RL\main.py --config autocontroller_rebuild_for_RL\runtime_config.local.json --tmp_win_target
+py -3.13 .\autocontroller_rebuild_for_RL\main.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json --tmp_win_target
 ```
 
 普通宏手柄（`macro1` 至 `macro999`，当前已实现的配置以代码注册表为准）：
 
 ```powershell
-.venv\Scripts\python.exe autocontroller_rebuild_for_RL\macro_gamepad.py --config autocontroller_rebuild_for_RL\runtime_config.local.json --macro macro1
+py -3.13 .\autocontroller_rebuild_for_RL\macro_gamepad.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json --macro macro1
 ```
 
 智能宏手柄（在普通宏控制基础上增加视频状态观察）：
 
 ```powershell
-.venv\Scripts\python.exe autocontroller_rebuild_for_RL\smart_macro_gamepad.py --config autocontroller_rebuild_for_RL\runtime_config.local.json
+py -3.13 .\autocontroller_rebuild_for_RL\smart_macro_gamepad.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json
 ```
 
 克隆水母对战：
 
 ```powershell
-.venv\Scripts\python.exe autocontroller_rebuild_for_RL\clone_jelly_main.py --config autocontroller_rebuild_for_RL\runtime_config.local.json
+py -3.13 .\autocontroller_rebuild_for_RL\clone_jelly_main.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json
 ```
 
 启动前说明：
@@ -88,19 +136,19 @@ conda install -c conda-forge ffmpeg
 启用局域网服务端：
 
 ```powershell
-python tableturf_sim\tools\play_service.py --bind 0.0.0.0
+py -3.13 .\tableturf_sim\tools\play_service.py --bind 0.0.0.0
 ```
 
 占地斗士启动客户端（主机创建房间需要运行服务端）：
 
 ```powershell
-python tableturf_sim\tools\play_client.py --name Host
+py -3.13 .\tableturf_sim\tools\play_client.py --name Host
 ```
 
 占地斗士启动客户端简易客机端：
 
 ```powershell
-python tableturf_sim\tools\play_client_simple.py --name Client
+py -3.13 .\tableturf_sim\tools\play_client_simple.py --name Client
 ```
 
 相关卡牌/牌组文件：
@@ -113,7 +161,7 @@ python tableturf_sim\tools\play_client_simple.py --name Client
 视频流展示（即流程3中调用的）：
 
 ```powershell
-.venv\Scripts\python.exe vision_capture\preview_stream_opencv.py
+py -3.13 .\vision_capture\preview_stream_opencv.py
 ```
 
 ## 无用废话

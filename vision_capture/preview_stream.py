@@ -18,6 +18,7 @@ from vision_capture.adapter import (
     auto_detect_capture_device_name,
     is_usb_capture_device_name,
     list_avfoundation_video_devices,
+    resolve_ffmpeg_tool,
 )
 
 
@@ -103,7 +104,7 @@ def _build_ffplay_cmd(
     window_title: str,
 ) -> List[str]:
     cmd = [
-        "ffplay",
+        resolve_ffmpeg_tool("ffplay") or "ffplay",
         "-hide_banner",
         "-loglevel",
         "warning",

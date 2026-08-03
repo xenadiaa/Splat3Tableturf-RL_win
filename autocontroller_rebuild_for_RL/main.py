@@ -138,7 +138,7 @@ def _switch_link_probe_priority(label: str, configured_port: str = "") -> tuple[
         return (1, text)
     if "wch" in text or "ch340" in text:
         return (2, text)
-    if "/dev/cu." in text:
+    if port.upper().startswith("COM"):
         return (3, text)
     return (4, text)
 
@@ -160,10 +160,19 @@ def _ensure_switch_link_ready(config, config_path: str | Path = "") -> None:
             config.serial_port = configured
             config.pick_serial = False
             return
-    remaining_labels = [label for label in labels if parse_device_from_label(label) != configured]
-    usable_labels = _usable_switch_link_labels(remaining_labels, configured)
+    # Re-probe every enumerated port so a transient failure on the configured
+    # port does not remove it from the interactive recovery pass.
+    usable_labels = _usable_switch_link_labels(labels, configured)
     if not usable_labels:
-        raise RuntimeError("未检测到可用的 switch_link 串口，请先连接正确的 CP2104/虚拟手柄串口后再启动。")
+        if not labels:
+            raise RuntimeError(
+                "Windows 未枚举到任何串口。请连接 CP2104/虚拟手柄，并确认设备管理器中已出现 COM 端口。"
+            )
+        detected = "; ".join(labels)
+        raise RuntimeError(
+            "检测到了串口，但没有端口通过 AutoController 固件握手。"
+            f"请检查固件、驱动、数据线和端口占用。当前串口：{detected}"
+        )
     picked = _prompt_choice(usable_labels, "选择可用的 switch_link 串口")
     if not picked:
         raise RuntimeError("未选择 switch_link 串口，启动已取消。")
@@ -249,8 +258,12 @@ def main() -> int:
         print(json.dumps(asdict(config), ensure_ascii=False, indent=2))
         return 0
 
-    _ensure_switch_link_ready(config, args.config)
-    _ensure_vision_ready(config)
+    try:
+        _ensure_switch_link_ready(config, args.config)
+        _ensure_vision_ready(config)
+    except Exception as exc:
+        print(f"启动失败：{exc}", file=sys.stderr)
+        return 1
 
     override_target_wins = _prompt_target_wins_if_needed(args)
     if override_target_wins is not None:

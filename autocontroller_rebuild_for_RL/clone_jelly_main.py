@@ -92,8 +92,12 @@ def main() -> int:
         print(json.dumps(asdict(config), ensure_ascii=False, indent=2))
         return 0
 
-    _ensure_switch_link_ready(config, args.config)
-    _ensure_vision_ready(config)
+    try:
+        _ensure_switch_link_ready(config, args.config)
+        _ensure_vision_ready(config)
+    except Exception as exc:
+        print(f"启动失败：{exc}", file=sys.stderr)
+        return 1
 
     override_target_wins = _prompt_target_wins_if_needed(args)
     if override_target_wins is not None:

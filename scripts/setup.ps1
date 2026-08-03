@@ -7,6 +7,7 @@ $ReqFile = Join-Path $RootDir "requirements.txt"
 $ConfigExample = Join-Path $RootDir "autocontroller_rebuild_for_RL\runtime_config.example.json"
 $ConfigLocal = Join-Path $RootDir "autocontroller_rebuild_for_RL\runtime_config.local.json"
 $CaptureConfig = Join-Path $RootDir "vision_capture\capture_config.json"
+$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 
 Write-Host "[setup] repo root: $RootDir"
 
@@ -25,14 +26,29 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
     exit 1
 }
 
-if (-not (Test-Path $VenvDir)) {
+& $PythonCmd @PythonArgs --version
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[setup] error: detected Python command cannot run"
+    Write-Host "[setup] install Python 3.10+ and enable Add Python to PATH"
+    exit 1
+}
+
+if ((Test-Path $VenvDir) -and -not (Test-Path $VenvPython)) {
+    Write-Host "[setup] existing .venv is incomplete or belongs to another operating system; rebuilding it"
+    Remove-Item -Recurse -Force $VenvDir
+}
+
+if (-not (Test-Path $VenvPython)) {
     Write-Host "[setup] creating virtual environment at .venv"
     & $PythonCmd @PythonArgs -m venv $VenvDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[setup] error: failed to create Windows virtual environment"
+        exit 1
+    }
 } else {
     Write-Host "[setup] using existing virtual environment at .venv"
 }
 
-$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 if (-not (Test-Path $VenvPython)) {
     Write-Host "[setup] error: venv python not found at $VenvPython"
     exit 1

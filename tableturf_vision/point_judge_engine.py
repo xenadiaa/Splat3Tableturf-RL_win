@@ -9,6 +9,11 @@ from typing import Dict, List, Tuple
 import cv2
 import numpy as np
 
+try:
+    from tableturf_vision.image_io import imread_unicode
+except ModuleNotFoundError:
+    from image_io import imread_unicode
+
 import sys
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -350,7 +355,7 @@ def _optimize_uniform_card_grid(
 
 
 def init_first_turn_profile(image_path: Path, layout_json: Path | None, profile_out: Path | None) -> Dict:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     layout = _load_layout(layout_json)
@@ -521,7 +526,7 @@ def init_first_turn_profile(image_path: Path, layout_json: Path | None, profile_
 
 
 def eval_turn_by_profile(image_path: Path, profile: Dict) -> Dict:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
 

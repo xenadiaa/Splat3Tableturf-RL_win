@@ -10,6 +10,11 @@ from typing import Dict, List, Tuple
 import cv2
 import numpy as np
 
+try:
+    from tableturf_vision.image_io import imread_unicode
+except ModuleNotFoundError:
+    from image_io import imread_unicode
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SP_COORD_IMAGE = REPO_ROOT / "tableturf_vision" / "参照基础_坐标点确定" / "sp_check.png"
@@ -32,7 +37,7 @@ def _resolve_image(image: str, input_dir: str) -> Path:
 
 
 def _load_sp_reference_points(coord_image: Path, keep: str) -> List[Dict]:
-    coord_img = cv2.imread(str(coord_image), cv2.IMREAD_UNCHANGED)
+    coord_img = imread_unicode(coord_image, cv2.IMREAD_UNCHANGED)
     if coord_img is None:
         raise ValueError(f"cannot read coordinate image: {coord_image}")
 
@@ -209,14 +214,14 @@ def get_enemy_sp_count_frame(frame_bgr: np.ndarray) -> int:
 
 
 def get_sp_count_image_path(image_path: Path) -> int:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     return get_sp_count_frame(frame)
 
 
 def get_enemy_sp_count_image_path(image_path: Path) -> int:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     return get_enemy_sp_count_frame(frame)
@@ -252,7 +257,7 @@ def main() -> int:
         return 0
 
     image = _resolve_image(args.image, args.input_dir)
-    frame = cv2.imread(str(image))
+    frame = imread_unicode(image)
     if frame is None:
         raise ValueError(f"cannot read image: {image}")
     result = detect_enemy_sp_points(frame) if args.enemy else detect_sp_points(frame)

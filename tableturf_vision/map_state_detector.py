@@ -15,6 +15,11 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import cv2
 import numpy as np
 
+try:
+    from tableturf_vision.image_io import imread_unicode
+except ModuleNotFoundError:
+    from image_io import imread_unicode
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -107,7 +112,7 @@ def _load_map_info() -> Dict[str, Dict]:
 
 
 def _extract_pure_green_points(image_path: Path) -> List[Dict]:
-    img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    img = imread_unicode(image_path, cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ValueError(f"cannot read coordinate image: {image_path}")
     bgr = img[:, :, :3] if img.shape[2] == 4 else img
@@ -852,7 +857,7 @@ class MapStateTracker:
         return result
 
     def update_image_path(self, image_path: Path) -> Dict:
-        frame = cv2.imread(str(image_path))
+        frame = imread_unicode(image_path)
         if frame is None:
             raise ValueError(f"cannot read image: {image_path}")
         result = self.update_frame(frame)
@@ -896,7 +901,7 @@ class MapStateTracker:
         x: int,
         y: int,
     ) -> Dict:
-        frame = cv2.imread(str(image_path))
+        frame = imread_unicode(image_path)
         if frame is None:
             raise ValueError(f"cannot read image: {image_path}")
         result = self.update_frame_with_action(frame, card_number, rotation, x, y)
@@ -948,7 +953,7 @@ def render_map_state_grid(map_name: str, result: Dict, colorize: bool = True) ->
 
 
 def detect_map_state_image_path(image_path: Path, map_name: str) -> Dict:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     result = detect_map_state(frame, map_name)

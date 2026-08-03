@@ -95,6 +95,8 @@ py -3.13 .\autocontroller_rebuild_for_RL\main.py --config .\autocontroller_rebui
 py -3.13 .\autocontroller_rebuild_for_RL\macro_gamepad.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json --macro macro1
 ```
 
+运行期间按 `P` 暂停/恢复。暂停会释放按键和摇杆，并冻结当前动作及 macro5 的卖装计时；恢复时先重新执行一次手柄检测，再继续原序列。按 `Q` 或 `Ctrl+C` 退出。
+
 智能宏手柄（在普通宏控制基础上增加视频状态观察）：
 
 ```powershell

@@ -8,6 +8,11 @@ from typing import Dict, List, Tuple
 import cv2
 import numpy as np
 
+try:
+    from tableturf_vision.image_io import imread_unicode
+except ModuleNotFoundError:
+    from image_io import imread_unicode
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAP_INFO_PATH = REPO_ROOT / "tableturf_sim" / "data" / "maps" / "MiniGameMapInfo.json"
 
@@ -105,8 +110,8 @@ def judge_with_green_points(map_name: str, annotated_path: Path, target_path: Pa
     width, height = int(m["width"]), int(m["height"])
     ptype = np.array(m["point_type"], dtype=np.int32)
 
-    annotated = cv2.imread(str(annotated_path))
-    target = cv2.imread(str(target_path))
+    annotated = imread_unicode(annotated_path)
+    target = imread_unicode(target_path)
     if annotated is None:
         raise ValueError(f"cannot read annotated image: {annotated_path}")
     if target is None:

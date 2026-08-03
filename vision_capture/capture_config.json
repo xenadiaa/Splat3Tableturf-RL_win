@@ -2,7 +2,7 @@
   "device_name": "UGREEN 35287",
   "pick_device": false,
   "allow_non_usb": false,
-  "preview_spec": "1920x1080 / uyvy422",
+  "preview_spec": "1920x1080 / mjpeg",
   "fps": 30,
   "window_title": "Capture Card Preview",
   "probe_seconds": 2.0,

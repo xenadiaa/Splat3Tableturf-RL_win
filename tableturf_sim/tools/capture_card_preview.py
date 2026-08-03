@@ -29,8 +29,12 @@ def parse_size(size: str) -> tuple[int, int]:
 
 def run_list_devices() -> int:
     cmd = ["ffmpeg", "-f", "dshow", "-list_devices", "true", "-i", "dummy"]
-    proc = subprocess.run(cmd, text=True, capture_output=True)
-    merged = f"{proc.stdout}\n{proc.stderr}".strip()
+    # FFmpeg may mix UTF-8 and ANSI bytes on Windows. Avoid strict GBK
+    # decoding in subprocess reader threads, which can erase the device list.
+    proc = subprocess.run(cmd, capture_output=True)
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    merged = f"{stdout}\n{stderr}".strip()
     if merged:
         print(merged)
     return proc.returncode

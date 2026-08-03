@@ -22,6 +22,7 @@ from autocontroller_rebuild_for_RL.runtime import (
 from autocontroller_rebuild_for_RL.main import (
     _ensure_switch_link_ready,
     _ensure_vision_ready,
+    _resolved_runtime_config_path,
 )
 
 
@@ -86,6 +87,9 @@ def main() -> int:
     args = _parse_args()
     config = load_config(args.config)
     config = apply_clone_jelly_profile(config)
+    resolved_config_path = _resolved_runtime_config_path(args.config)
+    if resolved_config_path is not None:
+        setattr(config, "_runtime_config_path", str(resolved_config_path))
     setattr(config, "_original_continuous_run", bool(config.continuous_run))
     setattr(config, "_original_target_win_count", int(config.target_win_count))
     if args.print_config:
@@ -94,7 +98,7 @@ def main() -> int:
 
     try:
         _ensure_switch_link_ready(config, args.config)
-        _ensure_vision_ready(config)
+        _ensure_vision_ready(config, args.config)
     except Exception as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         return 1

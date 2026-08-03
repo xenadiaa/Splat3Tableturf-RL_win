@@ -9,6 +9,11 @@ from typing import Dict, List, Sequence, Tuple
 import cv2
 import numpy as np
 
+try:
+    from tableturf_vision.image_io import imread_unicode
+except ModuleNotFoundError:
+    from image_io import imread_unicode
+
 
 DEFAULT_LAYOUT = {
     "board_roi_norm": [0.485, 0.12, 0.24, 0.82],
@@ -375,7 +380,7 @@ def _overlay_grid(img: np.ndarray, parsed: GridParseResult, title: str) -> None:
 
 
 def analyze_image(path: Path, layout: Dict, write_overlay: bool, out_dir: Path) -> Dict:
-    frame = cv2.imread(str(path))
+    frame = imread_unicode(path)
     if frame is None:
         raise ValueError(f"cannot read image: {path}")
 

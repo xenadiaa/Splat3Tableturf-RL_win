@@ -149,12 +149,15 @@ def _write_json_obj(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def _usb_capture_device_names() -> List[str]:
+    return [name for name in _all_video_device_names() if is_usb_capture_device_name(name)]
+
+
+def _all_video_device_names() -> List[str]:
     names = [str(name).strip() for name in list_avfoundation_video_devices()]
-    names = [name for name in names if name and is_usb_capture_device_name(name)]
     seen: Set[str] = set()
     out: List[str] = []
     for name in names:
-        if name in seen:
+        if not name or name in seen:
             continue
         seen.add(name)
         out.append(name)
@@ -962,23 +965,41 @@ class FrameApiAutoLauncher:
         launch_config_path = self._launch_config_path()
         launch_cfg = _load_json_obj(launch_config_path)
         configured_name = str(launch_cfg.get("device_name", "") or self._config.capture_device_name or "").strip()
-        available_usb = _usb_capture_device_names()
-        if configured_name and configured_name in available_usb and is_usb_capture_device_name(configured_name):
+        if configured_name and configured_name.lower() != "invalid":
+            self._config.capture_device_name = configured_name
             return
-        if not available_usb:
-            raise RuntimeError("NO_USB_CAPTURE_DEVICE_AVAILABLE")
+
+        all_devices = _all_video_device_names()
+        available_usb = [name for name in all_devices if is_usb_capture_device_name(name)]
+        configured_allow_non_usb = bool(launch_cfg.get("allow_non_usb", False))
+        if configured_name and configured_name in all_devices and (
+            is_usb_capture_device_name(configured_name) or configured_allow_non_usb
+        ):
+            return
+        choices = available_usb or all_devices
+        allow_non_usb = not bool(available_usb)
+        if not choices:
+            raise RuntimeError("NO_VIDEO_CAPTURE_DEVICE_AVAILABLE")
         picked = ""
         if sys.stdin.isatty() and sys.stdout.isatty():
-            picked = str(choose_with_arrows(available_usb, "选择可用的采集卡设备") or "").strip()
+            title = "未识别到采集卡，请从全部视频设备中手动选择" if allow_non_usb else "选择可用的采集卡设备"
+            picked = str(choose_with_arrows(choices, title) or "").strip()
         else:
-            picked = str(available_usb[0]).strip()
+            if allow_non_usb:
+                raise RuntimeError("VIDEO_CAPTURE_MANUAL_SELECTION_REQUIRED")
+            picked = str(choices[0]).strip()
         if not picked:
             raise RuntimeError("CAPTURE_DEVICE_SELECTION_CANCELLED")
         launch_cfg["device_name"] = picked
         launch_cfg["pick_device"] = False
-        launch_cfg["allow_non_usb"] = False
+        launch_cfg["allow_non_usb"] = bool(allow_non_usb or not is_usb_capture_device_name(picked))
         _write_json_obj(launch_config_path, launch_cfg)
         self._config.capture_device_name = picked
+        runtime_config_path = str(getattr(self._config, "_runtime_config_path", "") or "").strip()
+        if runtime_config_path:
+            runtime_payload = _load_json_obj(Path(runtime_config_path))
+            runtime_payload["capture_device_name"] = picked
+            _write_json_obj(Path(runtime_config_path), runtime_payload)
 
     def is_ready(self, timeout_seconds: float = 1.0) -> bool:
         health_url = self._health_url()
@@ -2171,6 +2192,7 @@ class TerminalDebugUI:
         self._stop = threading.Event()
         self._interactive = False
         self._first_frame = True
+        self._last_render_body = ""
         self._started = False
 
     def start(self) -> None:
@@ -2184,6 +2206,7 @@ class TerminalDebugUI:
         self._started = True
         self._stop.clear()
         self._first_frame = True
+        self._last_render_body = ""
         self._thread = threading.Thread(target=self._run, name="terminal-debug-ui", daemon=True)
         self._thread.start()
 
@@ -2320,14 +2343,16 @@ class TerminalDebugUI:
             lines.append(_fit(f"  {item}"))
         lines = lines[: max(1, height - 1)]
         body = "\n".join(lines)
+        if not self._first_frame and body == self._last_render_body:
+            return
         if self._first_frame:
-            self._write_output("\r\033[2J\033[H")
+            self._write_output("\r\033[2J\033[H" + body)
             self._first_frame = False
         else:
-            self._write_output("\r\033[H\033[J")
-        self._write_output(body)
-        if not body.endswith("\n"):
-            self._write_output("\n")
+            # Write the new frame before erasing its tail. CMD otherwise exposes
+            # a blank frame between ESC[J and the following body write.
+            self._write_output("\r\033[H" + body + "\033[J")
+        self._last_render_body = body
         self._flush_output()
 
     def _write_output(self, text: str) -> None:
@@ -2908,6 +2933,12 @@ class AutoControllerRuntime:
         self.serial_port = next_port
         self.config.serial_port = next_port
         self.config.pick_serial = False
+        runtime_config_path = str(getattr(self.config, "_runtime_config_path", "") or "").strip()
+        if runtime_config_path:
+            runtime_payload = _load_json_obj(Path(runtime_config_path))
+            runtime_payload["serial_port"] = next_port
+            runtime_payload["pick_serial"] = False
+            _write_json_obj(Path(runtime_config_path), runtime_payload)
         self._set_status(serial_port=self.serial_port)
         self._logger.write(f"检测到原 switch_link 串口不可用，已自动切换到当前可用串口：{next_port}。", tag="CONTROLLER")
         self._push_event(f"switch_link_reconnected:{next_port}", tag="CONTROLLER")

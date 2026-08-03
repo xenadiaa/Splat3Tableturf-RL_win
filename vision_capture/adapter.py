@@ -13,6 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import cv2
 import numpy as np
 
 from .state_types import ObservedState
@@ -35,6 +36,32 @@ class VisionAdapter:
     @staticmethod
     def dump_state_json(state: ObservedState, path: str) -> None:
         Path(path).write_text(json.dumps(asdict(state), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def capture_error_may_indicate_device_busy(error: object) -> bool:
+    """Return whether a capture failure commonly means another app owns the device."""
+    message = str(error or "").casefold()
+    busy_markers = (
+        "i/o error",
+        "device or resource busy",
+        "resource busy",
+        "device is busy",
+        "device in use",
+        "being used by another process",
+        "used by another process",
+        "cannot start graph",
+        "0x800700aa",
+    )
+    return any(marker in message for marker in busy_markers)
+
+
+def capture_device_busy_message(error: object) -> str:
+    detail = str(error or "").strip()
+    message = (
+        "视频采集设备可能正被其他程序占用，当前进程无法打开其 I/O。"
+        "请关闭 OBS、VLC、相机、浏览器视频页面或其他采集/预览程序后重试。"
+    )
+    return f"{message} 原始错误：{detail}" if detail else message
 
 
 def resolve_ffmpeg_tool(tool_name: str = "ffmpeg") -> str:
@@ -78,51 +105,75 @@ def _list_ffmpeg_video_devices_text() -> str:
             "安装后重新打开终端或重启 Windows。"
         )
     cmd = [ffmpeg_executable, "-f", "dshow", "-list_devices", "true", "-i", "dummy"]
-    proc = subprocess.run(cmd, text=True, capture_output=True)
-    return (proc.stderr or "") + (proc.stdout or "")
+    # FFmpeg output may contain bytes that are invalid in Windows' active GBK
+    # code page. Keep subprocess in binary mode and decode tolerantly here.
+    proc = subprocess.run(cmd, capture_output=True)
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    return stderr + stdout
 
 
-def list_avfoundation_video_devices() -> List[str]:
-    """
-    Return DirectShow video device names from ffmpeg listing.
-    """
-    text = _list_ffmpeg_video_devices_text()
-    names: List[str] = []
+def _parse_dshow_video_device_rows(text: str) -> List[Dict[str, str]]:
+    rows: List[Dict[str, str]] = []
     in_video_section = False
-    for line in text.splitlines():
-        if "DirectShow video devices" in line:
+    pending_video_row: Optional[int] = None
+    for line in str(text or "").splitlines():
+        lower = line.lower()
+        if "directshow video devices" in lower:
             in_video_section = True
             continue
-        if "DirectShow audio devices" in line:
+        if "directshow audio devices" in lower:
             in_video_section = False
+            pending_video_row = None
             continue
-        if not in_video_section:
+        if "alternative name" in lower:
+            match = re.search(r'"([^\"]+)"', line)
+            if match and pending_video_row is not None:
+                rows[pending_video_row]["device_id"] = match.group(1).strip()
+            pending_video_row = None
             continue
-        m = re.search(r'"(.+)"', line.strip())
-        if m:
-            names.append(m.group(1).strip())
+
+        match = re.search(r'"([^\"]+)"', line)
+        if not match:
+            continue
+        suffix = line[match.end() :].lower()
+        explicitly_video = bool(re.search(r"\(\s*video(?:\s*[,/)])", suffix))
+        if not in_video_section and not explicitly_video:
+            continue
+
+        name = match.group(1).strip()
+        if not name:
+            continue
+        rows.append(
+            {
+                "index": str(len(rows)),
+                "name": name,
+                "device_id": name,
+            }
+        )
+        pending_video_row = len(rows) - 1
+    return rows
+
+
+def _parse_dshow_video_device_names(text: str) -> List[str]:
+    names: List[str] = []
+    seen = set()
+    for row in _parse_dshow_video_device_rows(text):
+        name = row["name"]
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
     return names
 
 
+def list_avfoundation_video_devices() -> List[str]:
+    """Return DirectShow video device names from ffmpeg listing."""
+    return _parse_dshow_video_device_names(_list_ffmpeg_video_devices_text())
+
+
 def list_avfoundation_video_device_rows() -> List[Dict[str, str]]:
-    text = _list_ffmpeg_video_devices_text()
-    rows: List[Dict[str, str]] = []
-    in_video_section = False
-    next_index = 0
-    for line in text.splitlines():
-        if "DirectShow video devices" in line:
-            in_video_section = True
-            continue
-        if "DirectShow audio devices" in line:
-            in_video_section = False
-            continue
-        if not in_video_section:
-            continue
-        m = re.search(r'"(.+)"', line.strip())
-        if m:
-            rows.append({"index": str(next_index), "name": m.group(1).strip()})
-            next_index += 1
-    return rows
+    return _parse_dshow_video_device_rows(_list_ffmpeg_video_devices_text())
 
 
 def is_usb_capture_device_name(name: str) -> bool:
@@ -213,13 +264,17 @@ class FFmpegCaptureSource:
         self.height = height
         self.fps = fps
         self.pixel_format = pixel_format
+        self._mjpeg_transport = str(pixel_format or "").strip().lower() in {"mjpeg", "mjpg"}
         self.strict_usb_only = strict_usb_only
         self._proc: Optional[subprocess.Popen] = None
         self._frame_bytes = self.width * self.height * 3
         self._rx_buffer = bytearray()
         self.last_error: Optional[str] = None
         self._reader_thread: Optional[threading.Thread] = None
+        self._stderr_thread: Optional[threading.Thread] = None
         self._stop_reader = threading.Event()
+        self._stderr_lock = threading.Lock()
+        self._stderr_buffer = bytearray()
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_frame_ts: float = 0.0
@@ -227,21 +282,28 @@ class FFmpegCaptureSource:
 
     def _resolve_video_input_name(self) -> str:
         name = str(self.device_name or "").strip()
+        if name.lower().startswith("@device_"):
+            return f"video={name}"
         if name.isdigit():
             rows = list_avfoundation_video_device_rows()
             for row in rows:
                 if row["index"] == name:
-                    return f"video={row['name']}"
+                    return f"video={row.get('device_id') or row['name']}"
             return f"video={name}"
         rows = list_avfoundation_video_device_rows()
         for row in rows:
+            if row.get("device_id") == name:
+                return f"video={name}"
+        for row in rows:
             if row["name"] == name:
-                return f"video={row['name']}"
+                return f"video={row.get('device_id') or row['name']}"
         return f"video={name}"
 
     def start(self) -> None:
         if self._proc is not None:
             return
+        with self._stderr_lock:
+            self._stderr_buffer.clear()
         if self.strict_usb_only and not is_usb_capture_device_name(self.device_name):
             self.last_error = f"DEVICE_REJECTED_NOT_USB_CAPTURE:{self.device_name}"
             raise ValueError(self.last_error)
@@ -252,6 +314,7 @@ class FFmpegCaptureSource:
             "height": self.height,
             "fps": self.fps,
             "pixel_format": self.pixel_format,
+            "transport": "mjpeg_copy" if self._mjpeg_transport else "rawvideo",
         }
         ffmpeg_executable = resolve_ffmpeg_tool("ffmpeg")
         if not ffmpeg_executable:
@@ -268,26 +331,32 @@ class FFmpegCaptureSource:
             "-nostdin",
             "-f",
             "dshow",
+            "-rtbufsize",
+            "8M",
+        ]
+        if self._mjpeg_transport:
+            cmd.extend(["-vcodec", "mjpeg"])
+        elif self.pixel_format:
+            cmd.extend(["-pixel_format", self.pixel_format])
+        cmd.extend([
             "-framerate",
             str(self.fps),
             "-video_size",
             f"{self.width}x{self.height}",
             "-i",
             inp,
-            "-pix_fmt",
-            "bgr24",
-            "-f",
-            "rawvideo",
-            "pipe:1",
-        ]
-        if self.pixel_format:
-            cmd[7:7] = ["-pixel_format", self.pixel_format]
+            "-an",
+        ])
+        if self._mjpeg_transport:
+            cmd.extend(["-c:v", "copy", "-f", "mjpeg", "pipe:1"])
+        else:
+            cmd.extend(["-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"])
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
-            bufsize=self._frame_bytes * 2,
+            bufsize=(1024 * 1024 if self._mjpeg_transport else self._frame_bytes * 2),
         )
         if os.name != "nt":
             if self._proc.stdout is not None:
@@ -298,13 +367,16 @@ class FFmpegCaptureSource:
                     os.set_blocking(self._proc.stderr.fileno(), False)
         self._stop_reader.clear()
         self._reader_thread = threading.Thread(target=self._reader_loop, name="ffmpeg-capture-reader", daemon=True)
+        self._stderr_thread = threading.Thread(target=self._stderr_loop, name="ffmpeg-stderr-reader", daemon=True)
         self._reader_thread.start()
+        self._stderr_thread.start()
 
     def restart_with(self, width: int, height: int, pixel_format: str) -> None:
         self.stop()
         self.width = int(width)
         self.height = int(height)
         self.pixel_format = str(pixel_format)
+        self._mjpeg_transport = self.pixel_format.strip().lower() in {"mjpeg", "mjpg"}
         self._frame_bytes = self.width * self.height * 3
         self._rx_buffer = bytearray()
         self.start()
@@ -316,32 +388,45 @@ class FFmpegCaptureSource:
         return dict(self._active_capture_spec)
 
     def _stderr_tail(self, max_bytes: int = 4096) -> str:
-        if self._proc is None or self._proc.stderr is None:
-            return ""
-        if os.name == "nt":
-            if self._proc.poll() is None:
-                return ""
-            with contextlib.suppress(Exception):
-                return self._proc.stderr.read(max_bytes).decode("utf-8", errors="ignore").strip()
-            return ""
-        fd = self._proc.stderr.fileno()
-        chunks = bytearray()
-        while len(chunks) < max_bytes:
+        with self._stderr_lock:
+            payload = bytes(self._stderr_buffer[-max(1, int(max_bytes)) :])
+        return payload.decode("utf-8", errors="replace").strip()
+
+    def _stderr_loop(self) -> None:
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+        stream = proc.stderr
+        while not self._stop_reader.is_set():
             try:
-                part = os.read(fd, min(1024, max_bytes - len(chunks)))
+                if hasattr(stream, "read1"):
+                    chunk = stream.read1(4096)
+                else:
+                    chunk = stream.read(4096)
             except BlockingIOError:
-                break
-            if not part:
-                break
-            chunks.extend(part)
-        return chunks.decode("utf-8", errors="ignore").strip()
+                self._stop_reader.wait(0.02)
+                continue
+            except (OSError, ValueError):
+                return
+            if not chunk:
+                if proc.poll() is not None:
+                    return
+                self._stop_reader.wait(0.02)
+                continue
+            with self._stderr_lock:
+                self._stderr_buffer.extend(chunk)
+                if len(self._stderr_buffer) > 16384:
+                    del self._stderr_buffer[:-16384]
 
     def _read_from_pipe_once(self, timeout_seconds: float) -> bool:
         if self._proc is None or self._proc.stdout is None:
             return False
         if os.name == "nt":
             try:
-                chunk = self._proc.stdout.read(self._frame_bytes)
+                if self._mjpeg_transport and hasattr(self._proc.stdout, "read1"):
+                    chunk = self._proc.stdout.read1(1024 * 1024)
+                else:
+                    chunk = self._proc.stdout.read(self._frame_bytes)
             except (OSError, ValueError):
                 return False
             if not chunk:
@@ -362,6 +447,25 @@ class FFmpegCaptureSource:
         return True
 
     def _pop_frame(self) -> Optional[np.ndarray]:
+        if self._mjpeg_transport:
+            latest_packet: Optional[bytes] = None
+            while True:
+                start = self._rx_buffer.find(b"\xff\xd8")
+                if start < 0:
+                    if len(self._rx_buffer) > 1:
+                        del self._rx_buffer[:-1]
+                    break
+                if start > 0:
+                    del self._rx_buffer[:start]
+                end = self._rx_buffer.find(b"\xff\xd9", 2)
+                if end < 0:
+                    break
+                latest_packet = bytes(self._rx_buffer[: end + 2])
+                del self._rx_buffer[: end + 2]
+            if latest_packet is None:
+                return None
+            frame = cv2.imdecode(np.frombuffer(latest_packet, dtype=np.uint8), cv2.IMREAD_COLOR)
+            return frame if frame is not None and frame.size > 0 else None
         if len(self._rx_buffer) < self._frame_bytes:
             return None
         frame_bytes = bytes(self._rx_buffer[: self._frame_bytes])
@@ -403,7 +507,12 @@ class FFmpegCaptureSource:
             if frame is not None:
                 return frame
             if time.monotonic() >= deadline:
-                self.last_error = f"FRAME_TIMEOUT({timeout_seconds}s)"
+                proc = self._proc
+                tail = self._stderr_tail()
+                if proc is not None and proc.poll() is not None:
+                    self.last_error = f"FFMPEG_EXITED({proc.returncode}) {tail}".strip()
+                else:
+                    self.last_error = f"FRAME_TIMEOUT({timeout_seconds}s) {tail}".strip()
                 return None
             time.sleep(0.02)
 
@@ -419,7 +528,12 @@ class FFmpegCaptureSource:
                 self.last_error = None
                 return frame
             if time.monotonic() >= deadline:
-                self.last_error = f"FRAME_TIMEOUT({timeout_seconds}s)"
+                proc = self._proc
+                tail = self._stderr_tail()
+                if proc is not None and proc.poll() is not None:
+                    self.last_error = f"FFMPEG_EXITED({proc.returncode}) {tail}".strip()
+                else:
+                    self.last_error = f"FRAME_TIMEOUT({timeout_seconds}s) {tail}".strip()
                 return None
             time.sleep(0.02)
 
@@ -466,6 +580,9 @@ class FFmpegCaptureSource:
         if self._reader_thread is not None:
             self._reader_thread.join(timeout=1.0)
             self._reader_thread = None
+        if self._stderr_thread is not None:
+            self._stderr_thread.join(timeout=1.0)
+            self._stderr_thread = None
 
         # Avoid blocking forever in wait() when ffmpeg is stuck.
         exited = False

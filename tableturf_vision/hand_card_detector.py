@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tableturf_vision.tableturf_mapper import DEFAULT_LAYOUT, _card_special_score
+from tableturf_vision.image_io import imread_unicode
 
 CARD_REFERENCE_IMAGES = [
     REPO_ROOT / "tableturf_vision" / "参照基础" / "卡牌识别_可用.png",
@@ -29,7 +30,7 @@ SLOT_NAMES = ["left_top", "right_top", "left_bottom", "right_bottom"]
 
 
 def _extract_pure_green_points(image_path: Path) -> List[Dict]:
-    img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    img = imread_unicode(image_path, cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ValueError(f"cannot read coordinate image: {image_path}")
     bgr = img[:, :, :3] if img.shape[2] == 4 else img
@@ -100,7 +101,7 @@ def _classify_hand_card_point(mean_bgr: np.ndarray) -> str:
 
 @lru_cache(maxsize=1)
 def load_hand_card_reference_points() -> Dict[str, List[Dict]]:
-    ref_img = cv2.imread(str(CARD_REFERENCE_IMAGES[0]))
+    ref_img = imread_unicode(CARD_REFERENCE_IMAGES[0])
     if ref_img is None:
         raise ValueError(f"cannot read reference image: {CARD_REFERENCE_IMAGES[0]}")
 
@@ -191,7 +192,7 @@ def detect_hand_cards(frame_bgr: np.ndarray) -> Dict:
 
 
 def detect_hand_cards_image_path(image_path: Path) -> Dict:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     result = detect_hand_cards(frame)

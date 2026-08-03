@@ -26,6 +26,7 @@ from tableturf_vision.map_state_detector import (
     collect_rotating_frames_from_frame_api,
     render_map_state_grid,
 )
+from tableturf_vision.image_io import imread_unicode
 
 
 SETTLEMENT_COORD_DIR = REPO_ROOT / "tableturf_vision" / "参照基础_坐标点确定"
@@ -159,7 +160,7 @@ def analyze_settlement_map_state(frame_bgr: np.ndarray, map_name: str) -> Dict:
 
 
 def analyze_settlement_map_state_image_path(image_path: Path, map_name: str) -> Dict:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     result = analyze_settlement_map_state(frame, map_name)

@@ -9,6 +9,11 @@ from typing import Dict, List
 import cv2
 import numpy as np
 
+try:
+    from tableturf_vision.image_io import imread_unicode
+except ModuleNotFoundError:
+    from image_io import imread_unicode
+
 from tableturf_vision.map_state_detector import (
     MAP_NAMES,
     _classify_cell,
@@ -141,7 +146,7 @@ def match_map_by_reference_board_labels(board_labels: List[List[str]], layout: D
         map_id = name2id.get(name_cn, "")
         if not map_id:
             continue
-        tmpl_frame = cv2.imread(str(template_path))
+        tmpl_frame = imread_unicode(template_path)
         if tmpl_frame is None:
             continue
         tmpl_board = _parse_board(tmpl_frame, layout)
@@ -235,7 +240,7 @@ def match_map_from_frame(frame_bgr: np.ndarray) -> Dict:
         ):
             better = True
         if better:
-            tmpl_frame = cv2.imread(str(template_path))
+            tmpl_frame = imread_unicode(template_path)
             tmpl_board = _parse_board(tmpl_frame, _load_layout(None)) if tmpl_frame is not None else None
             best = {
                 "enum_index": int(id_to_enum.get(name2id.get(map_name, ""), -1)),
@@ -272,7 +277,7 @@ def detect_map_from_frame(frame_bgr: np.ndarray, layout: Dict | None = None) -> 
 
 def detect_map_from_image_path(image_path: Path, layout: Dict | None = None) -> Dict:
     path = image_path if image_path.is_absolute() else (REPO_ROOT / image_path)
-    frame = cv2.imread(str(path))
+    frame = imread_unicode(path)
     if frame is None:
         raise ValueError(f"cannot read image: {path}")
     result = detect_map_from_frame(frame, layout=layout)

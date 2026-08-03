@@ -10,6 +10,11 @@ from typing import Dict, Tuple
 import cv2
 import numpy as np
 
+try:
+    from tableturf_vision.image_io import imread_unicode
+except ModuleNotFoundError:
+    from image_io import imread_unicode
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -56,7 +61,7 @@ def _white_text_mask(roi_bgr: np.ndarray) -> np.ndarray:
 
 @lru_cache(maxsize=1)
 def _load_lose_template() -> Dict:
-    frame = cv2.imread(str(LOSE_TEMPLATE_IMAGE))
+    frame = imread_unicode(LOSE_TEMPLATE_IMAGE)
     if frame is None:
         raise ValueError(f"cannot read lose template image: {LOSE_TEMPLATE_IMAGE}")
     x, y, w, h = get_playable_banner_roi_abs(frame.shape)
@@ -71,7 +76,7 @@ def _load_lose_template() -> Dict:
 
 @lru_cache(maxsize=1)
 def _load_win_template() -> Dict:
-    frame = cv2.imread(str(WIN_TEMPLATE_IMAGE))
+    frame = imread_unicode(WIN_TEMPLATE_IMAGE)
     if frame is None:
         raise ValueError(f"cannot read win template image: {WIN_TEMPLATE_IMAGE}")
     x, y, w, h = get_playable_banner_roi_abs(frame.shape)
@@ -86,7 +91,7 @@ def _load_win_template() -> Dict:
 
 @lru_cache(maxsize=1)
 def _load_draw_template() -> Dict:
-    frame = cv2.imread(str(DRAW_TEMPLATE_IMAGE))
+    frame = imread_unicode(DRAW_TEMPLATE_IMAGE)
     if frame is None:
         raise ValueError(f"cannot read draw template image: {DRAW_TEMPLATE_IMAGE}")
     x, y, w, h = get_playable_banner_roi_abs(frame.shape)
@@ -236,7 +241,7 @@ def is_playable_frame(frame_bgr: np.ndarray) -> bool:
 
 
 def is_playable_image_path(image_path: Path) -> bool:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     return is_playable_frame(frame)
@@ -247,7 +252,7 @@ def is_lose_frame(frame_bgr: np.ndarray) -> bool:
 
 
 def is_lose_image_path(image_path: Path) -> bool:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     return is_lose_frame(frame)
@@ -258,7 +263,7 @@ def is_win_frame(frame_bgr: np.ndarray) -> bool:
 
 
 def is_win_image_path(image_path: Path) -> bool:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     return is_win_frame(frame)
@@ -269,7 +274,7 @@ def is_draw_frame(frame_bgr: np.ndarray) -> bool:
 
 
 def is_draw_image_path(image_path: Path) -> bool:
-    frame = cv2.imread(str(image_path))
+    frame = imread_unicode(image_path)
     if frame is None:
         raise ValueError(f"cannot read image: {image_path}")
     return is_draw_frame(frame)
@@ -301,7 +306,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     image = _resolve_image(args.image, args.input_dir)
-    frame = cv2.imread(str(image))
+    frame = imread_unicode(image)
     if frame is None:
         raise ValueError(f"cannot read image: {image}")
     result = detect_playable_banner(frame)

@@ -41,6 +41,18 @@ conda install -c conda-forge ffmpeg
 .venv\Scripts\python.exe autocontroller_rebuild_for_RL\main.py --config autocontroller_rebuild_for_RL\runtime_config.local.json --tmp_win_target
 ```
 
+普通宏手柄（`macro1` 至 `macro999`，当前已实现的配置以代码注册表为准）：
+
+```powershell
+.venv\Scripts\python.exe autocontroller_rebuild_for_RL\macro_gamepad.py --config autocontroller_rebuild_for_RL\runtime_config.local.json --macro macro1
+```
+
+智能宏手柄（在普通宏控制基础上增加视频状态观察）：
+
+```powershell
+.venv\Scripts\python.exe autocontroller_rebuild_for_RL\smart_macro_gamepad.py --config autocontroller_rebuild_for_RL\runtime_config.local.json
+```
+
 克隆水母对战：
 
 ```powershell

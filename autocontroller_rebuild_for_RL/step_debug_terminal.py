@@ -37,18 +37,11 @@ from src.utils.common_utils import create_card_from_id
 from src.utils.localization import lookup_card_name_zh
 from tableturf_vision.mapper_preview import CLR_RESET
 from switch_connect.virtual_gamepad.serial_controller import SerialRemoteController
+from switch_connect.virtual_gamepad.input_mapper import REMOTE_INPUT_BITS
 
 
 BIT_NAMES: Dict[int, str] = {
-    0: "A",
-    1: "B",
-    2: "X",
-    3: "Y",
-    9: "Plus",
-    22: "DPadUp",
-    23: "DPadDown",
-    24: "DPadLeft",
-    25: "DPadRight",
+    bit_index: name for name, bit_index in REMOTE_INPUT_BITS.items()
 }
 
 VISION_RGB: Dict[str, Tuple[int, int, int]] = {

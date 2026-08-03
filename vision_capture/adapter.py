@@ -242,12 +242,13 @@ class FFmpegCaptureSource:
             stdin=subprocess.DEVNULL,
             bufsize=self._frame_bytes * 2,
         )
-        if self._proc.stdout is not None:
-            with contextlib.suppress(Exception):
-                os.set_blocking(self._proc.stdout.fileno(), False)
-        if self._proc.stderr is not None:
-            with contextlib.suppress(Exception):
-                os.set_blocking(self._proc.stderr.fileno(), False)
+        if os.name != "nt":
+            if self._proc.stdout is not None:
+                with contextlib.suppress(Exception):
+                    os.set_blocking(self._proc.stdout.fileno(), False)
+            if self._proc.stderr is not None:
+                with contextlib.suppress(Exception):
+                    os.set_blocking(self._proc.stderr.fileno(), False)
         self._stop_reader.clear()
         self._reader_thread = threading.Thread(target=self._reader_loop, name="ffmpeg-capture-reader", daemon=True)
         self._reader_thread.start()
@@ -270,6 +271,12 @@ class FFmpegCaptureSource:
     def _stderr_tail(self, max_bytes: int = 4096) -> str:
         if self._proc is None or self._proc.stderr is None:
             return ""
+        if os.name == "nt":
+            if self._proc.poll() is None:
+                return ""
+            with contextlib.suppress(Exception):
+                return self._proc.stderr.read(max_bytes).decode("utf-8", errors="ignore").strip()
+            return ""
         fd = self._proc.stderr.fileno()
         chunks = bytearray()
         while len(chunks) < max_bytes:
@@ -285,6 +292,15 @@ class FFmpegCaptureSource:
     def _read_from_pipe_once(self, timeout_seconds: float) -> bool:
         if self._proc is None or self._proc.stdout is None:
             return False
+        if os.name == "nt":
+            try:
+                chunk = self._proc.stdout.read(self._frame_bytes)
+            except (OSError, ValueError):
+                return False
+            if not chunk:
+                return False
+            self._rx_buffer.extend(chunk)
+            return True
         out_fd = self._proc.stdout.fileno()
         ready, _, _ = select.select([out_fd], [], [], max(0.0, timeout_seconds))
         if not ready:
@@ -396,13 +412,13 @@ class FFmpegCaptureSource:
         proc = self._proc
         self._proc = None
         self._stop_reader.set()
-        if self._reader_thread is not None:
-            self._reader_thread.join(timeout=1.0)
-            self._reader_thread = None
         try:
             proc.terminate()
         except Exception:
             pass
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=1.0)
+            self._reader_thread = None
 
         # Avoid blocking forever in wait() when ffmpeg is stuck.
         exited = False

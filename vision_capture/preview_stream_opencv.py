@@ -45,7 +45,7 @@ CAPTURE_PROFILES: List[Dict[str, object]] = [
 ]
 
 DEFAULT_CONFIG: Dict[str, object] = {
-    "device_name": "UGREEN 35287",
+    "device_name": "",
     "pick_device": False,
     "allow_non_usb": False,
     "preview_spec": "1920x1080 / mjpeg",

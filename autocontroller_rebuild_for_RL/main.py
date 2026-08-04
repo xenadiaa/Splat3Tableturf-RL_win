@@ -266,7 +266,7 @@ def _ensure_frame_api_capture_device_selected(config, config_path: str | Path = 
         rows = _all_video_device_rows()
         exact = [row for row in rows if row["device_id"] == configured_name]
         friendly = [row for row in rows if row["name"] == configured_name]
-        selected_name = configured_name
+        selected_name = ""
         if exact:
             selected_name = exact[0]["device_id"]
         elif len(friendly) == 1:
@@ -275,18 +275,19 @@ def _ensure_frame_api_capture_device_selected(config, config_path: str | Path = 
             selected_name = _prompt_video_device(friendly, "检测到同名视频设备，请选择采集卡")
             if not selected_name:
                 raise RuntimeError("未选择同名视频设备，启动已取消。")
-        launch_cfg["device_name"] = selected_name
-        launch_cfg["pick_device"] = False
-        selected_row = next((row for row in rows if row["device_id"] == selected_name), None)
-        launch_cfg["allow_non_usb"] = bool(
-            selected_row is not None and not is_usb_capture_device_name(selected_row["name"])
-        )
-        _write_json_obj(launch_config_path, launch_cfg)
-        config.capture_device_name = selected_name
-        resolved = _resolved_runtime_config_path(config_path)
-        if resolved is not None:
-            _persist_runtime_capture_selection(resolved, selected_name)
-        return
+        if selected_name:
+            launch_cfg["device_name"] = selected_name
+            launch_cfg["pick_device"] = False
+            selected_row = next((row for row in rows if row["device_id"] == selected_name), None)
+            launch_cfg["allow_non_usb"] = bool(
+                selected_row is not None and not is_usb_capture_device_name(selected_row["name"])
+            )
+            _write_json_obj(launch_config_path, launch_cfg)
+            config.capture_device_name = selected_name
+            resolved = _resolved_runtime_config_path(config_path)
+            if resolved is not None:
+                _persist_runtime_capture_selection(resolved, selected_name)
+            return
 
     all_rows = _all_video_device_rows()
     usb_rows = [row for row in all_rows if is_usb_capture_device_name(row["name"])]
@@ -294,7 +295,11 @@ def _ensure_frame_api_capture_device_selected(config, config_path: str | Path = 
     allow_non_usb = not bool(usb_rows)
     if not choices:
         raise RuntimeError("Windows 未枚举到任何可用视频设备，请检查采集卡连接和驱动。")
-    title = "未识别到采集卡，请从全部视频设备中手动选择" if allow_non_usb else "选择可用的采集卡设备"
+    title = (
+        f"配置的视频设备不存在（{configured_name}），请选择当前设备"
+        if configured_name and configured_name.lower() != "invalid"
+        else ("未识别到采集卡，请从全部视频设备中手动选择" if allow_non_usb else "选择可用的采集卡设备")
+    )
     picked = _prompt_video_device(choices, title)
     if not picked:
         raise RuntimeError("未选择视频采集设备，启动已取消。")

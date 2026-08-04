@@ -190,7 +190,7 @@ def _ensure_switch_link_ready(config, config_path: str | Path = "") -> None:
     if not usable_labels:
         if not labels:
             raise RuntimeError(
-                "Windows 未枚举到任何串口。请连接 CP2104/虚拟手柄，并确认设备管理器中已出现 COM 端口。"
+                "Windows 未枚举到任何串口。请连接运行 AutoController 兼容固件的虚拟手柄，并确认设备管理器中已出现 COM 端口。"
             )
         detected = "; ".join(labels)
         raise RuntimeError(
@@ -290,22 +290,23 @@ def _ensure_frame_api_capture_device_selected(config, config_path: str | Path = 
             return
 
     all_rows = _all_video_device_rows()
-    usb_rows = [row for row in all_rows if is_usb_capture_device_name(row["name"])]
-    choices = usb_rows or all_rows
-    allow_non_usb = not bool(usb_rows)
+    choices = sorted(all_rows, key=lambda row: 0 if is_usb_capture_device_name(row["name"]) else 1)
     if not choices:
         raise RuntimeError("Windows 未枚举到任何可用视频设备，请检查采集卡连接和驱动。")
     title = (
         f"配置的视频设备不存在（{configured_name}），请选择当前设备"
         if configured_name and configured_name.lower() != "invalid"
-        else ("未识别到采集卡，请从全部视频设备中手动选择" if allow_non_usb else "选择可用的采集卡设备")
+        else "请选择视频采集设备（疑似采集卡优先显示）"
     )
     picked = _prompt_video_device(choices, title)
     if not picked:
         raise RuntimeError("未选择视频采集设备，启动已取消。")
     launch_cfg["device_name"] = picked
     launch_cfg["pick_device"] = False
-    launch_cfg["allow_non_usb"] = bool(allow_non_usb or not is_usb_capture_device_name(picked))
+    picked_row = next((row for row in all_rows if row["device_id"] == picked), None)
+    launch_cfg["allow_non_usb"] = bool(
+        picked_row is not None and not is_usb_capture_device_name(picked_row["name"])
+    )
     _write_json_obj(launch_config_path, launch_cfg)
     config.capture_device_name = picked
     resolved = _resolved_runtime_config_path(config_path)

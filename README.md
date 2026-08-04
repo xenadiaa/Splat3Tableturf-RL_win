@@ -24,30 +24,36 @@ cd Splat3Tableturf-RL_win
 winget install -e --id Python.Python.3.13
 ```
 
-安装完成后关闭并重新打开终端，确认 Python 版本：
+安装完成后关闭并重新打开终端，确认 `python` 已指向 Python 3.13：
 
 ```cmd
-py -3.13 --version
-py -0p
+python --version
+where python
 ```
 
-推荐使用项目安装脚本创建独立虚拟环境并安装全部依赖：
+本项目优先推荐直接使用系统 Python 安装依赖，不要求创建虚拟环境：
+
+```cmd
+python -m pip install --upgrade pip
+python -m pip install --user -r requirements.txt
+```
+
+如果电脑中安装了多个 Python，且 `python --version` 不是 3.13，可以临时使用 Python Launcher 指定版本：
+
+```cmd
+py -3.13 -m pip install --user -r requirements.txt
+```
+
+虚拟环境安装脚本仍然保留，但只作为可选方式：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
 
-如果不使用虚拟环境，也可以直接使用 Python 3.13 安装 `requirements.txt`：
-
-```cmd
-py -3.13 -m pip install --upgrade pip
-py -3.13 -m pip install --user -r requirements.txt
-```
-
 如果只运行不需要采集卡的普通 Macro，可以只安装串口依赖：
 
 ```cmd
-py -3.13 -m pip install --user pyserial
+python -m pip install --user pyserial
 ```
 
 自动对战和智能 Macro 需要 FFmpeg。推荐使用 WinGet 安装：
@@ -81,18 +87,18 @@ conda install -c conda-forge ffmpeg
 
 ## 3. 运行主命令
 
-以下命令统一使用 Windows Python Launcher 的 `py -3.13`，不要求 `.venv` 存在。如果已经通过 `setup.ps1` 成功创建虚拟环境，可以将命令开头的 `py -3.13` 替换为 `.\.venv\Scripts\python.exe`。
+以下命令均从项目根目录执行，并直接使用系统 `python`。请先通过 `python --version` 确认版本为 Python 3.11 以上，推荐 Python 3.13。
 
 自动对战：
 
 ```powershell
-py -3.13 .\autocontroller_rebuild_for_RL\main.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json --tmp_win_target
+python .\autocontroller_rebuild_for_RL\main.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json --tmp_win_target
 ```
 
 普通宏手柄（`macro1` 至 `macro999`，当前已实现的配置以代码注册表为准）：
 
 ```powershell
-py -3.13 .\autocontroller_rebuild_for_RL\macro_gamepad.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json --macro macro1
+python .\autocontroller_rebuild_for_RL\macro_gamepad.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json --macro macro1
 ```
 
 运行期间按 `P` 暂停/恢复。暂停会释放按键和摇杆，并冻结当前动作及 macro1～5 的卖装计时；恢复时先重新执行一次手柄检测，再继续原序列。macro1～5 每运行 90 分钟，会在下一轮进入地图前执行一次卖装；macro6 不执行卖装。按 `Q` 或 `Ctrl+C` 退出。
@@ -100,13 +106,13 @@ py -3.13 .\autocontroller_rebuild_for_RL\macro_gamepad.py --config .\autocontrol
 智能宏手柄（在普通宏控制基础上增加视频状态观察）：
 
 ```powershell
-py -3.13 .\autocontroller_rebuild_for_RL\smart_macro_gamepad.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json
+python .\autocontroller_rebuild_for_RL\smart_macro_gamepad.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json
 ```
 
 克隆水母对战：
 
 ```powershell
-py -3.13 .\autocontroller_rebuild_for_RL\clone_jelly_main.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json
+python .\autocontroller_rebuild_for_RL\clone_jelly_main.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json
 ```
 
 启动前说明：
@@ -131,40 +137,53 @@ py -3.13 .\autocontroller_rebuild_for_RL\clone_jelly_main.py --config .\autocont
 目前有PPO训练网络，可自行研究使用
 先前自对弈策略训练结果未上传，因为效果远不如当前使用策略，后续数据充足重新训练，如果效果好会上传，该部分需大家合力而为，我个人获取的replay数据是有限的，为了充足的数据支撑策略训练，还望大家能够将回放文件发予我！
 
-## 附加
+## 6. 视频流工具
+
+自动对战会自动启动视频流。需要单独测试采集卡、帧率或 Frame API 时，可以在项目根目录运行：
+
+```cmd
+python .\vision_capture\preview_stream_opencv.py
+```
+
+启动后默认提供：
+
+- 视频帧接口：`http://127.0.0.1:8765/frame.jpg`
+- 健康状态接口：`http://127.0.0.1:8765/health`
+- `Enter`：保存当前截图
+- `B`：连续保存 30 帧
+- `R`：重新选择视频设备
+- `Esc` 或 `Ctrl+C`：退出
+
+视频设备选择会写入 `vision_capture/capture_config.json`。程序会枚举 Windows 中的全部视频设备，疑似采集卡只会优先显示，不会排除其他品牌。
+
+## 7. 局域网占地斗士
 
 本项目做了一个简陋的终端展示，可以自行进行局域网联机占地斗士对战游玩，但是需要自行根据卡牌编号，配置对应的卡牌文件：
+
+服务端和客户端需要分别在独立的 CMD/PowerShell 窗口中运行。首次启动服务端时，如果 Windows 防火墙询问是否允许 Python 访问网络，请允许专用网络访问。
 
 启用局域网服务端：
 
 ```powershell
-py -3.13 .\tableturf_sim\tools\play_service.py --bind 0.0.0.0
+python .\tableturf_sim\tools\play_service.py --bind 0.0.0.0
 ```
 
 占地斗士启动客户端（主机创建房间需要运行服务端）：
 
 ```powershell
-py -3.13 .\tableturf_sim\tools\play_client.py --name Host
+python .\tableturf_sim\tools\play_client.py --name Host
 ```
 
 占地斗士启动客户端简易客机端：
 
 ```powershell
-py -3.13 .\tableturf_sim\tools\play_client_simple.py --name Client
+python .\tableturf_sim\tools\play_client_simple.py --name Client
 ```
 
 相关卡牌/牌组文件：
 
 - `tableturf_sim/tools/play_client_simple_decks.json`
 - `tableturf_sim/data/cards/PlayerPresetDeck.json`
-
-工具：
-
-视频流展示（即流程3中调用的）：
-
-```powershell
-py -3.13 .\vision_capture\preview_stream_opencv.py
-```
 
 ## 无用废话
 本项目存在大量临时文件，未进行整理。

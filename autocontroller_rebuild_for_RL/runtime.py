@@ -976,23 +976,21 @@ class FrameApiAutoLauncher:
             is_usb_capture_device_name(configured_name) or configured_allow_non_usb
         ):
             return
-        choices = available_usb or all_devices
-        allow_non_usb = not bool(available_usb)
+        choices = sorted(all_devices, key=lambda name: 0 if is_usb_capture_device_name(name) else 1)
         if not choices:
             raise RuntimeError("NO_VIDEO_CAPTURE_DEVICE_AVAILABLE")
         picked = ""
         if sys.stdin.isatty() and sys.stdout.isatty():
-            title = "未识别到采集卡，请从全部视频设备中手动选择" if allow_non_usb else "选择可用的采集卡设备"
-            picked = str(choose_with_arrows(choices, title) or "").strip()
+            picked = str(choose_with_arrows(choices, "请选择视频采集设备（疑似采集卡优先显示）") or "").strip()
         else:
-            if allow_non_usb:
+            if not available_usb:
                 raise RuntimeError("VIDEO_CAPTURE_MANUAL_SELECTION_REQUIRED")
-            picked = str(choices[0]).strip()
+            picked = str(available_usb[0]).strip()
         if not picked:
             raise RuntimeError("CAPTURE_DEVICE_SELECTION_CANCELLED")
         launch_cfg["device_name"] = picked
         launch_cfg["pick_device"] = False
-        launch_cfg["allow_non_usb"] = bool(allow_non_usb or not is_usb_capture_device_name(picked))
+        launch_cfg["allow_non_usb"] = not is_usb_capture_device_name(picked)
         _write_json_obj(launch_config_path, launch_cfg)
         self._config.capture_device_name = picked
         runtime_config_path = str(getattr(self._config, "_runtime_config_path", "") or "").strip()
@@ -3424,7 +3422,7 @@ class AutoControllerRuntime:
                 return
             if str(exc) in {"NO_AVAILABLE_SWITCH_LINK_PORT", "SWITCH_LINK_UNAVAILABLE_EXIT"}:
                 self._set_status(phase="error", last_error=str(exc), status="stopping")
-                self._push_event("程序已安全退出：switch_link 串口不可用或无法恢复，请检查 CP2104/串口连接后重新启动。", tag="CONTROLLER_ERROR")
+                self._push_event("程序已安全退出：switch_link 串口不可用或无法恢复，请检查虚拟手柄固件、串口连接和端口占用后重新启动。", tag="CONTROLLER_ERROR")
                 self._logger.write("switch_link 串口不可用，已安全退出。", tag="CONTROLLER_ERROR")
                 self.request_stop("switch_link_unavailable_exit", tag="CONTROLLER_ERROR")
                 return

@@ -59,6 +59,10 @@ DEFAULT_CONFIG: Dict[str, object] = {
     "prefix": "capture",
 }
 
+# Many capture cards need several seconds to finish firmware/input initialization
+# before DirectShow produces the first frame, even though FFmpeg has opened them.
+FIRST_FRAME_STARTUP_TIMEOUT_SECONDS = 10.0
+
 
 class _FFmpegPreviewCapture:
     def __init__(self, source: FFmpegCaptureSource):
@@ -206,7 +210,9 @@ def _open_video_capture(
             pixel_format=str(profile["pixel_format"]),
             strict_usb_only=False,
         )
-        first_frame = source.read(timeout_seconds=max(2.0, timeout_seconds))
+        first_frame = source.read(
+            timeout_seconds=max(FIRST_FRAME_STARTUP_TIMEOUT_SECONDS, timeout_seconds)
+        )
         if first_frame is not None:
             return _FFmpegPreviewCapture(source), profile, first_frame, "", str(device_name)
         last_error = source.last_error or f"{profile['label']}: FRAME_TIMEOUT({timeout_seconds}s)"

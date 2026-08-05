@@ -106,8 +106,14 @@ python .\autocontroller_rebuild_for_RL\macro_gamepad.py --config .\autocontrolle
 智能宏手柄（在普通宏控制基础上增加视频状态观察）：
 
 ```powershell
-python .\autocontroller_rebuild_for_RL\smart_macro_gamepad.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json
+python .\autocontroller_rebuild_for_RL\smart_macro_gamepad.py --config .\autocontroller_rebuild_for_RL\runtime_config.local.json --macro macro1
 ```
+
+`smart macro1` 沿用 macro5 与每 90 分钟卖装流程。手柄检测后，第一轮前执行 Y、A、等待 10 秒和摇杆后 5 秒；第一轮持续重复“额外 A 4 秒 → 进入地图 → A 4 秒+A×3”，并在整个序列期间持续检测画面，命中四个白色图标后直接进入 ZR 阶段。第二轮起每轮先进入地图一次，再重复“A 4 秒+A×3检测”直到命中。第一轮大循环与第二轮小循环都会在每个按键前、按住期间及按键间隔持续检测，命中后立即释放按键并跳过剩余序列。射击阶段持续保持 ZR，并按 L→R→A 轮换，每 1 秒短按一个技能键、每 3 秒完成一套。
+
+`smart macro2` 在手柄检测后、第一轮前短按 A 四次（每次 50ms、间隔 500ms），等待 10 秒并将左摇杆向后推动 5 秒；不再执行选图序列，第一轮及后续轮次均直接循环“A 4 秒+A×3检测”直到命中。长按 A、短按 A1、A2、A3 每个按键发送前都会检测，命中后立即跳过当前及剩余按键并进入 ZR 阶段。射击阶段持续保持 ZR，并按 L→R→A 轮换，每 1 秒短按一个技能键、每 3 秒完成一套。
+
+智能宏支持与占地斗士终端一致的手动键盘控制：`Z=A`、`X=B`、`A=Y`、`S=X`、方向键控制左摇杆、`C=L`、`V=R`、`F=ZL`、`G=ZR`、`+`/`=`/`D=Plus`、`-`/`E=Minus`。`P` 暂停或恢复宏，`Q` 退出；暂停期间仍可使用手动控制。键盘操作按终端短按脉冲发送，不依赖全局键盘监听库。
 
 克隆水母对战：
 

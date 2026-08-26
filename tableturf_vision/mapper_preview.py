@@ -235,8 +235,9 @@ def main() -> int:
     print(f"  {_rgb('[]', RGB['p2_fill'])} p2_fill")
     print(f"  {_rgb('[]', RGB['p2_special'])} p2_special")
     print(f"  {_rgb('[]', RGB['conflict'])} conflict")
-    print(f"  {_rgb('/\\\\', RGB['p1_special_activated'])} p1_special_activated")
-    print(f"  {_rgb('/\\\\', RGB['p2_special_activated'])} p2_special_activated")
+    activated_marker = "/\\\\"
+    print(f"  {_rgb(activated_marker, RGB['p1_special_activated'])} p1_special_activated")
+    print(f"  {_rgb(activated_marker, RGB['p2_special_activated'])} p2_special_activated")
     print("  '  ' invalid")
     print("")
     print("[Board]")

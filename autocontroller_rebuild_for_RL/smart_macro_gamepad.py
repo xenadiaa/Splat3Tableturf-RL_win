@@ -49,6 +49,12 @@ from autocontroller_rebuild_for_RL.runtime import FrameApiAutoLauncher, load_con
 from switch_connect.virtual_gamepad.input_mapper import (
     BIT_A,
     BIT_B,
+    BIT_CAPTURE,
+    BIT_DPAD_DOWN,
+    BIT_DPAD_LEFT,
+    BIT_DPAD_RIGHT,
+    BIT_DPAD_UP,
+    BIT_HOME,
     BIT_L,
     BIT_LSTICK_DOWN,
     BIT_LSTICK_LEFT,
@@ -57,6 +63,10 @@ from switch_connect.virtual_gamepad.input_mapper import (
     BIT_MINUS,
     BIT_PLUS,
     BIT_R,
+    BIT_RSTICK_DOWN,
+    BIT_RSTICK_LEFT,
+    BIT_RSTICK_RIGHT,
+    BIT_RSTICK_UP,
     BIT_X,
     BIT_Y,
     BIT_ZL,
@@ -78,6 +88,15 @@ _MANUAL_KEY_BITS = {
     "+": BIT_PLUS,
     "=": BIT_PLUS,
     "-": BIT_MINUS,
+    "h": BIT_HOME,
+    "\r": BIT_HOME,
+    "\n": BIT_HOME,
+    "i": BIT_RSTICK_UP,
+    "j": BIT_RSTICK_LEFT,
+    "k": BIT_RSTICK_DOWN,
+    "l": BIT_RSTICK_RIGHT,
+    ";": BIT_CAPTURE,
+    ":": BIT_CAPTURE,
 }
 _MANUAL_ARROW_BITS = {
     "UP": BIT_LSTICK_UP,
@@ -107,8 +126,13 @@ class WhiteIconDetection:
     candidate_count: int
 
 
-def detect_four_white_top_left_icons(frame: np.ndarray) -> WhiteIconDetection:
-    """Detect four similarly sized, horizontally aligned pure-white HUD glyphs."""
+def _detect_white_top_left_icons(
+    frame: np.ndarray,
+    required_count: int,
+) -> WhiteIconDetection:
+    """Detect the requested number of aligned white HUD glyphs."""
+    if required_count < 1:
+        raise ValueError("required_count must be at least 1")
     if frame is None or frame.size == 0 or frame.ndim != 3:
         return WhiteIconDetection(False, 0, 0)
 
@@ -160,32 +184,45 @@ def detect_four_white_top_left_icons(frame: np.ndarray) -> WhiteIconDetection:
             )
         )
 
-    # 四个 HUD 图案应在近似同一横排，且尺寸不能相差悬殊。
+    # HUD 图案应在近似同一横排，且尺寸不能相差悬殊。
     best_aligned_count = 0
     y_tolerance = max(4.0, height * 0.012)
     for anchor in candidates:
         row = [item for item in candidates if abs(item[1] - anchor[1]) <= y_tolerance]
-        if len(row) < 4:
+        if len(row) < required_count:
             best_aligned_count = max(best_aligned_count, len(row))
             continue
         row.sort(key=lambda item: item[0])
-        for start in range(0, len(row) - 3):
-            group = row[start : start + 4]
+        for start in range(0, len(row) - required_count + 1):
+            group = row[start : start + required_count]
             areas = [item[4] for item in group]
             heights = [item[3] for item in group]
             if max(areas) > min(areas) * 4.0:
                 continue
             if max(heights) > min(heights) * 2.5:
                 continue
-            gaps = [group[index + 1][0] - group[index][0] for index in range(3)]
+            gaps = [
+                group[index + 1][0] - group[index][0]
+                for index in range(required_count - 1)
+            ]
             if not all(width * 0.015 <= gap <= width * 0.045 for gap in gaps):
                 continue
-            best_aligned_count = max(best_aligned_count, 4)
+            best_aligned_count = max(best_aligned_count, required_count)
     return WhiteIconDetection(
-        detected=best_aligned_count >= 4,
+        detected=best_aligned_count >= required_count,
         aligned_icon_count=best_aligned_count,
         candidate_count=len(candidates),
     )
+
+
+def detect_three_white_top_left_icons(frame: np.ndarray) -> WhiteIconDetection:
+    """Detect three similarly sized, horizontally aligned white HUD glyphs."""
+    return _detect_white_top_left_icons(frame, required_count=3)
+
+
+def detect_four_white_top_left_icons(frame: np.ndarray) -> WhiteIconDetection:
+    """Detect four similarly sized, horizontally aligned white HUD glyphs."""
+    return _detect_white_top_left_icons(frame, required_count=4)
 
 
 class LatestFrameObserver:
@@ -760,9 +797,188 @@ class SmartMacro2:
             context.complete_macro_loop()
 
 
+def _detect_three_white_icons_now(
+    observer: LatestFrameObserver,
+) -> bool:
+    """Check only the latest frame and return immediately."""
+    snapshot = observer.snapshot()
+    if snapshot.frame is None:
+        return False
+    return detect_three_white_top_left_icons(snapshot.frame).detected
+
+
+def _run_smart_macro_5_loop(
+    context: _MacroContext,
+    observer: LatestFrameObserver,
+) -> None:
+    """独立的 Smart Macro5：天妇罗巢穴长蓝自动。"""
+    while not context.stop_event.is_set():
+        if not context.run_auto_sell_if_due():
+            return
+
+        # 进入地图。
+        for bit_index, gap_ms in (
+            (BIT_X, 500),
+            (BIT_A, 500),
+            (BIT_A, 500),
+            (BIT_A, 500),
+            (BIT_A, 500),
+            (BIT_A, 500),
+            (BIT_A, 6500),
+        ):
+            if not context.tap(bit_index, hold_ms=50, gap_ms=gap_ms):
+                return
+
+        # 持续保持 ZR：先等待27秒，然后在保持期间向前推动2秒。
+        context.set_held(BIT_ZR, True)
+        if not context.wait_ms(27000):
+            return
+        if not context.move_stick(BIT_LSTICK_UP, duration_ms=2000):
+            return
+        context.center_stick()
+        context.set_held(BIT_ZR, False)
+
+        # 释放 ZR 后继续向前推动左摇杆2.8秒。
+        if not context.move_stick(BIT_LSTICK_UP, duration_ms=2800):
+            return
+        context.center_stick()
+
+        if not context.wait_ms(11000):
+            return
+            
+        if _detect_three_white_icons_now(observer):
+            # 当前帧识别成功时才执行；未识别到则直接跳过。
+            _timestamped_log("检测到卡死在局内，已录制并主动脱离。")
+            for bit_index, hold_ms, gap_ms in (
+                (BIT_CAPTURE, 2000, 500),
+                (BIT_PLUS, 50, 1000),
+                (BIT_DPAD_DOWN, 50, 1000),
+                (BIT_A, 50, 1000),
+                (BIT_DPAD_RIGHT, 50, 1000),
+                (BIT_A, 50, 5000),
+            ):
+                if not context.tap(bit_index, hold_ms=hold_ms, gap_ms=gap_ms):
+                    return
+                    
+        # 结束结算：最后一次 A 后只等待500ms。
+        for gap_ms in (1500, 1500, 1500, 1500, 1500, 500):
+            if not context.tap(BIT_A, hold_ms=50, gap_ms=gap_ms):
+                return
+        context.complete_macro_loop()
+
+
+def _run_smart_macro_6_part_1(context: _MacroContext) -> bool:
+    """Smart Macro6 独立第一段：Pokopia 更新梦幻章车轮次。"""
+    for direction in (
+        BIT_LSTICK_UP,
+        BIT_LSTICK_DOWN,
+        BIT_LSTICK_LEFT,
+        BIT_LSTICK_RIGHT,
+    ):
+        if not context.move_stick(direction, duration_ms=100):
+            return False
+    context.center_stick()
+    if not context.wait_ms(3000):
+        return False
+    for _ in range(6):
+        if not context.tap(BIT_B, hold_ms=50, gap_ms=500):
+            return False
+
+    first_steps = (
+        (BIT_PLUS, 500),
+        (BIT_MINUS, 2000),
+        (BIT_DPAD_UP, 500),
+        (BIT_A, 5000),
+        (BIT_HOME, 500),
+        (BIT_DPAD_DOWN, 500),
+        (BIT_DPAD_LEFT, 500),
+        (BIT_DPAD_LEFT, 500),
+        (BIT_A, 1500),
+        *((BIT_DPAD_DOWN, 500) for _ in range(6)),
+        (BIT_A, 500),
+        *((BIT_DPAD_DOWN, 500) for _ in range(3)),
+        (BIT_A, 500),
+        (BIT_A, 3000),
+        (BIT_A, 500),
+        (BIT_A, 3500),
+        (BIT_A, 1000),
+        (BIT_A, 4000),
+        (BIT_DPAD_UP, 500),
+        (BIT_A, 0),
+    )
+    for bit_index, gap_ms in first_steps:
+        if not context.tap(bit_index, hold_ms=50, gap_ms=gap_ms):
+            return False
+    return True
+
+
+def _run_smart_macro_6_part_2(context: _MacroContext) -> bool:
+    """Smart Macro6 独立第二段：Pokopia 后续更新序列。"""
+    for bit_index in (BIT_HOME, BIT_A, BIT_A, BIT_A, BIT_A):
+        if not context.tap(bit_index, hold_ms=50, gap_ms=500):
+            return False
+    if not context.wait_ms(45000):
+        return False
+
+    if not context.tap(BIT_A, hold_ms=50, gap_ms=20000):
+        return False
+    for _ in range(5):
+        if not context.tap(BIT_B, hold_ms=50, gap_ms=500):
+            return False
+
+    if not context.move_stick(BIT_LSTICK_UP, duration_ms=100):
+        return False
+    context.center_stick()
+    if not context.wait_ms(500):
+        return False
+
+    if not context.tap(BIT_A, hold_ms=50, gap_ms=3000):
+        return False
+    if not context.tap(BIT_DPAD_DOWN, hold_ms=50, gap_ms=500):
+        return False
+    if not context.tap(BIT_A, hold_ms=50, gap_ms=500):
+        return False
+    if not context.tap(BIT_A, hold_ms=50, gap_ms=500):
+        return False
+    if not context.wait_ms(1500):
+        return False
+    if not context.tap(BIT_A, hold_ms=50, gap_ms=1500):
+        return False
+    if not context.tap(BIT_A, hold_ms=50, gap_ms=1500):
+        return False
+    if not context.tap(BIT_PLUS, hold_ms=50, gap_ms=20000):
+        return False
+    if not context.tap(BIT_A, hold_ms=50, gap_ms=500):
+        return False
+    return True
+
+
+def _run_smart_macro_6_triggered(context: _MacroContext) -> None:
+    """待机并按键盘 1/2 执行 Smart Macro6 的独立序列。"""
+    _timestamped_log("smart macro6 已待机：按 1 执行第一段，按 2 执行第二段。")
+    part_runners = {
+        1: _run_smart_macro_6_part_1,
+        2: _run_smart_macro_6_part_2,
+    }
+    while not context.stop_event.is_set():
+        selected_part = 0
+        for part_number, trigger in context.macro6_part_triggers.items():
+            if trigger.is_set():
+                trigger.clear()
+                selected_part = part_number
+                break
+        if not selected_part:
+            context.stop_event.wait(0.05)
+            continue
+        _timestamped_log(f"smart macro6 开始执行第 {selected_part} 段。")
+        if not part_runners[selected_part](context):
+            return
+        _timestamped_log(f"smart macro6 第 {selected_part} 段执行完成，返回待机。")
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Video-aware state-machine macro gamepad (SmartMacro1/2)"
+        description="Smart macro gamepad (SmartMacro1/2/5/6)"
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="config JSON path")
     parser.add_argument("--baudrate", type=int, default=9600)
@@ -770,7 +986,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--probe-timeout", type=float, default=1.2)
     parser.add_argument(
         "--macro",
-        choices=("macro1", "macro2"),
+        choices=("macro1", "macro2", "macro5", "macro6"),
         default="macro1",
         help="smart macro profile",
     )
@@ -792,6 +1008,11 @@ def _send_manual_controller_pulse(context: _MacroContext, bit_index: int) -> Non
             base_bits & ~context.stick_direction_mask
         ) | (1 << bit_index)
         hold_ms = 150
+    elif bit_index in {BIT_RSTICK_UP, BIT_RSTICK_DOWN, BIT_RSTICK_LEFT, BIT_RSTICK_RIGHT}:
+        output_bits = (
+            base_bits & ~context.right_stick_direction_mask
+        ) | (1 << bit_index)
+        hold_ms = 150
     else:
         output_bits = base_bits | (1 << bit_index)
         hold_ms = 80 if bit_index in {BIT_L, BIT_R, BIT_ZL, BIT_ZR} else 50
@@ -800,6 +1021,26 @@ def _send_manual_controller_pulse(context: _MacroContext, bit_index: int) -> Non
     context.stop_event.wait(hold_ms / 1000.0)
     restore_bits = 0 if context.is_paused() else context.active_bits
     context.controller.send_bits(restore_bits)
+
+
+def _send_manual_controller_hold(
+    context: _MacroContext,
+    bit_index: int,
+    hold_ms: int,
+) -> None:
+    """Keep one manual button asserted even while the macro sends other states."""
+    bit = 1 << bit_index
+    if context.is_paused():
+        context.controller.send_bits(bit)
+        context.stop_event.wait(max(0, hold_ms) / 1000.0)
+        context.controller.send_bits(0)
+        return
+
+    context.active_bits |= bit
+    context.send_active_bits()
+    context.stop_event.wait(max(0, hold_ms) / 1000.0)
+    context.active_bits &= ~bit
+    context.send_active_bits()
 
 
 def _handle_terminal_control_key(
@@ -817,6 +1058,14 @@ def _handle_terminal_control_key(
             _timestamped_log("宏已暂停；可使用手动键盘控制。再次按 P 恢复。")
         else:
             _timestamped_log("收到恢复指令，准备重新执行手柄检测。")
+        return True
+    if context.macro_profile_name == "macro6" and normalized in {"1", "2"}:
+        part_number = int(normalized)
+        context.macro6_part_triggers[part_number].set()
+        _timestamped_log(f"已触发 smart macro6 第 {part_number} 段。")
+        return True
+    if key in {"'", '"'}:
+        _send_manual_controller_hold(context, BIT_CAPTURE, hold_ms=2000)
         return True
 
     bit_index = _MANUAL_ARROW_BITS.get(key.upper())
@@ -837,6 +1086,7 @@ def _read_windows_terminal_key() -> str:
         "P": "DOWN",
         "K": "LEFT",
         "M": "RIGHT",
+        "\x86": "F12",
     }.get(extended, "")
 
 
@@ -910,26 +1160,42 @@ def run_smart_macro_forever(
     stop_event = threading.Event()
     pause_state = _PauseState()
     worker_errors: List[BaseException] = []
-    observer = LatestFrameObserver(frame_url, stop_event, vision_interval)
+    observer = (
+        LatestFrameObserver(frame_url, stop_event, vision_interval)
+        if macro_profile in {"macro1", "macro2", "macro5"}
+        else None
+    )
     context = _MacroContext(controller, stop_event, pause_state)
-    smart_macro = SmartMacro1() if macro_profile == "macro1" else SmartMacro2()
+    context.macro_profile_name = macro_profile
+    smart_macro = (
+        SmartMacro1()
+        if macro_profile == "macro1"
+        else SmartMacro2() if macro_profile == "macro2" else None
+    )
 
     def controller_worker() -> None:
         try:
             if _run_controller_detection(context):
-                context.enable_auto_sell(f"smart_{macro_profile}")
-                smart_macro.run(context, observer)
+                if macro_profile in {"macro1", "macro2", "macro5"}:
+                    status_profile = (
+                        macro_profile
+                        if macro_profile == "macro5"
+                        else f"smart_{macro_profile}"
+                    )
+                    context.enable_auto_sell(status_profile)
+                if macro_profile == "macro6":
+                    _run_smart_macro_6_triggered(context)
+                elif macro_profile == "macro5":
+                    assert observer is not None
+                    _run_smart_macro_5_loop(context, observer)
+                else:
+                    assert smart_macro is not None and observer is not None
+                    smart_macro.run(context, observer)
         except BaseException as exc:
             worker_errors.append(exc)
             stop_event.set()
 
     workers = [
-        threading.Thread(
-            target=observer.run,
-            args=(worker_errors,),
-            name="smart-macro-video-observer",
-            daemon=True,
-        ),
         threading.Thread(
             target=controller_worker,
             name="smart-macro-controller",
@@ -942,6 +1208,16 @@ def run_smart_macro_forever(
             daemon=True,
         ),
     ]
+    if observer is not None:
+        workers.insert(
+            0,
+            threading.Thread(
+                target=observer.run,
+                args=(worker_errors,),
+                name="smart-macro-video-observer",
+                daemon=True,
+            ),
+        )
     for worker in workers:
         worker.start()
 
@@ -971,14 +1247,16 @@ def main() -> int:
         or runtime_config.frame_api_url
         or ""
     ).strip()
-    if not frame_url:
+    uses_video = args.macro in {"macro1", "macro2", "macro5"}
+    if uses_video and not frame_url:
         print("启动失败：config 中缺少 frame_api_url。", file=sys.stderr)
         return 1
 
-    launcher = FrameApiAutoLauncher(runtime_config)
+    launcher = FrameApiAutoLauncher(runtime_config) if uses_video else None
     controller = None
     try:
-        launcher.ensure_started()
+        if launcher is not None:
+            launcher.ensure_started()
         selected_port = wait_for_serial_selection(
             config_path=config_path,
             baudrate=args.baudrate,
@@ -990,11 +1268,19 @@ def main() -> int:
             baudrate=args.baudrate,
             timeout=0.1,
         )
+        macro6_help = (
+            "Smart Macro6：按 1 执行第一段，按 2 执行第二段。\n"
+            if args.macro == "macro6"
+            else ""
+        )
         print(
-            f"智能宏手柄已启动：{selected_port}；配置：{args.macro}；视频：{frame_url}。"
+            f"智能宏手柄已启动：{selected_port}；配置：{args.macro}；"
+            f"视频：{frame_url or '不使用'}。"
             "手柄检测只执行一次；按 P 暂停/恢复，按 Q 或 Ctrl+C 退出。\n"
+            f"{macro6_help}"
             "键盘：Z=A X=B A=Y S=X；方向键=左摇杆；"
-            "C=L V=R F=ZL G=ZR；+/D=Plus，-/E=Minus。"
+            "I/J/K/L=右摇杆上/左/下/右；C=L V=R F=ZL G=ZR；"
+            "H/Enter=Home；;/:=截图；'/\"=录屏；+/D=Plus，-/E=Minus。"
         )
         run_smart_macro_forever(
             controller=controller,
@@ -1014,7 +1300,8 @@ def main() -> int:
                 controller.release()
             with contextlib.suppress(Exception):
                 controller.close()
-        launcher.stop()
+        if launcher is not None:
+            launcher.stop()
 
 
 if __name__ == "__main__":

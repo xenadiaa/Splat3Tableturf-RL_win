@@ -184,6 +184,24 @@ def _unique_image_path(out_dir: Path, prefix: str, idx: int) -> Path:
     return out_dir / f"{prefix}_{ts}_{idx:05d}.png"
 
 
+def _save_png(path: Path, frame: np.ndarray) -> bool:
+    """Encode first, then write bytes so Windows paths may contain Unicode."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        success, encoded = cv2.imencode(".png", frame)
+        if not success:
+            print(f"[save-error] PNG encode failed: {path}")
+            return False
+        encoded.tofile(str(path))
+        if not path.is_file() or path.stat().st_size <= 0:
+            print(f"[save-error] PNG file was not written: {path}")
+            return False
+        return True
+    except Exception as exc:
+        print(f"[save-error] {path}: {exc}")
+        return False
+
+
 def _resolve_video_index(device_name: str) -> Optional[int]:
     name = str(device_name or "").strip()
     if name.isdigit():
@@ -518,8 +536,8 @@ def _save_burst_frames_worker(
 
     for offset, frame in enumerate(frames):
         path = _unique_image_path(out_dir, prefix, start_idx + offset)
-        cv2.imwrite(str(path), frame)
-        print(f"[saved] {path}")
+        if _save_png(path, frame):
+            print(f"[saved] {path}")
 
 
 def _overlay_status(
@@ -751,12 +769,15 @@ def main() -> int:
                 print(f"[reselect] config updated: {cfg_path}")
                 continue
             if key in (10, 13):
-                saved_count += 1
-                path = _unique_image_path(out_dir, prefix, saved_count)
                 frame_to_save = state.snapshot_frame()
-                if frame_to_save is not None:
-                    cv2.imwrite(str(path), frame_to_save)
-                print(f"[saved] {path}")
+                if frame_to_save is None:
+                    print("[save-error] No frame is currently available")
+                    continue
+                next_saved_count = saved_count + 1
+                path = _unique_image_path(out_dir, prefix, next_saved_count)
+                if _save_png(path, frame_to_save):
+                    saved_count = next_saved_count
+                    print(f"[saved] {path}")
                 continue
     finally:
         capture_stop_event.set()

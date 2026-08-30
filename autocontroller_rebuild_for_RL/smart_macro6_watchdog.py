@@ -54,6 +54,8 @@ if str(REPO_ROOT) not in sys.path:
 from autocontroller_rebuild_for_RL.macro_gamepad import (
     DEFAULT_CONFIG,
     SerialRemoteController,
+    _MANUAL_ARROW_BITS,
+    _MANUAL_KEY_BITS,
     _MacroContext,
     _PauseState,
     _commit_status_line,
@@ -109,7 +111,7 @@ CAPTURE_FALLBACK_SPECS = (
 MACRO_HEARTBEAT_TIMEOUT_SECONDS = 45.0
 CAPTURE_HEARTBEAT_TIMEOUT_SECONDS = 15.0
 RESTART_DELAY_SECONDS = 3.0
-MACRO6_BUILD_ID = "v1.5"
+MACRO6_BUILD_ID = "v1.12"
 SUPERVISED_CHILD_ENV = "MACRO6_SUPERVISED_CHILD"
 MACRO_HEARTBEAT_ENV = "MACRO6_MACRO_HEARTBEAT"
 CAPTURE_HEARTBEAT_ENV = "MACRO6_CAPTURE_HEARTBEAT"
@@ -118,6 +120,9 @@ CODE_ARCHIVE_DIRNAME = "pokopia_stamp_records"
 CODE_TIMER_RESTART_SECONDS = 15 * 60
 SEVERE_CODE_TIMER_RESTART_SECONDS = 30 * 60
 CODE_OCR_TIMEOUT_SECONDS = 3 * 60
+CONTROLLER_IDLE_KEEPALIVE_SECONDS = 5 * 60
+CONTROLLER_IDLE_KEEPALIVE_HOLD_MS = 50
+CONTROLLER_IDLE_KEEPALIVE_GAP_MS = 100
 BEIJING_TIMEZONE = timezone(timedelta(hours=8))
 DAILY_BOUNDARY_HOUR_BEIJING = 5
 
@@ -6144,6 +6149,63 @@ class _HeartbeatMacroContext(_MacroContext):
         self._automatic_restart_guard: _CursorGatedCodeTimer | None = None
         self._room_player_tracker: RoomPlayerTracker | None = None
         self._disconnect_on_next_home = False
+        self._controller_activity_lock = threading.Lock()
+        self._last_controller_input_monotonic = time.monotonic()
+        self._idle_keepalive_in_progress = False
+
+    def note_controller_input(self) -> None:
+        """Reset the five-minute inactivity timer after a real button input."""
+        with self._controller_activity_lock:
+            self._last_controller_input_monotonic = time.monotonic()
+
+    def _service_controller_idle_keepalive(self) -> bool:
+        """Send UP then DOWN after five minutes with no controller input."""
+        now = time.monotonic()
+        with self._controller_activity_lock:
+            if self._idle_keepalive_in_progress:
+                return True
+            if self.active_bits:
+                self._last_controller_input_monotonic = now
+                return True
+            if (
+                now - self._last_controller_input_monotonic
+                < CONTROLLER_IDLE_KEEPALIVE_SECONDS
+            ):
+                return True
+            self._idle_keepalive_in_progress = True
+            # Reserve the next interval immediately so another service point
+            # cannot begin a duplicate pair while this pair is being sent.
+            self._last_controller_input_monotonic = now
+
+        _timestamped_log(
+            "手柄连续300秒无按键输入：发送DPAD上、DPAD下保持画面活跃。"
+        )
+        button_held = False
+        try:
+            for bit_index, gap_ms in (
+                (BIT_DPAD_UP, CONTROLLER_IDLE_KEEPALIVE_GAP_MS),
+                (BIT_DPAD_DOWN, 0),
+            ):
+                self._raise_if_macro_interrupted()
+                self.heartbeat.beat()
+                self.controller.send_bits(1 << bit_index)
+                button_held = True
+                if self.stop_event.wait(
+                    CONTROLLER_IDLE_KEEPALIVE_HOLD_MS / 1000.0
+                ):
+                    return False
+                self.controller.release()
+                button_held = False
+                if gap_ms and self.stop_event.wait(gap_ms / 1000.0):
+                    return False
+            return not self.stop_event.is_set()
+        finally:
+            if button_held:
+                with contextlib.suppress(Exception):
+                    self.controller.release()
+            with self._controller_activity_lock:
+                self._last_controller_input_monotonic = time.monotonic()
+                self._idle_keepalive_in_progress = False
 
     def set_room_player_tracker(self, tracker: RoomPlayerTracker) -> None:
         self._room_player_tracker = tracker
@@ -6210,6 +6272,8 @@ class _HeartbeatMacroContext(_MacroContext):
     def send_active_bits(self) -> None:
         self._raise_if_macro_interrupted()
         self.heartbeat.beat()
+        if self.active_bits:
+            self.note_controller_input()
         super().send_active_bits()
 
     def _raw_wait_ms(self, duration_ms: int) -> bool:
@@ -6242,6 +6306,8 @@ class _HeartbeatMacroContext(_MacroContext):
             while self.pause_state.is_paused():
                 self._raise_if_macro_interrupted()
                 self.heartbeat.beat()
+                if not self._service_controller_idle_keepalive():
+                    return False
                 if self.status_callback is not None:
                     self.status_callback(False)
                 if self.stop_event.wait(0.05):
@@ -6264,6 +6330,8 @@ class _HeartbeatMacroContext(_MacroContext):
         while remaining > 0:
             self._raise_if_macro_interrupted()
             self.heartbeat.beat()
+            if not self._service_controller_idle_keepalive():
+                return False
             if not self._service_pause():
                 return False
             if self.status_callback is not None:
@@ -6279,6 +6347,8 @@ class _HeartbeatMacroContext(_MacroContext):
                 )
         self._raise_if_macro_interrupted()
         self.heartbeat.beat()
+        if not self._service_controller_idle_keepalive():
+            return False
         return self._service_pause()
 
 
@@ -7153,6 +7223,8 @@ def _run_macro6_watchdog_loop(
                 context._active_macro_key = selected_part
                 context.macro_running_event.set()
         if not selected_part:
+            if not context._service_controller_idle_keepalive():
+                return
             context.stop_event.wait(0.05)
             continue
 
@@ -7306,6 +7378,12 @@ def _handle_watchdog_control_key(
 
     # All regular manual keys intentionally retain the original behavior,
     # including while any Macro6 command is running.
+    if (
+        key in {"'", '"'}
+        or key.upper() in _MANUAL_ARROW_BITS
+        or normalized in _MANUAL_KEY_BITS
+    ):
+        context.note_controller_input()
     return _handle_terminal_control_key(key, context, pause_state)
 
 
@@ -7698,6 +7776,11 @@ class StampCodeArchive:
         room_status: str,
         action: str,
         room_players: tuple[tuple[str, str], ...],
+        ocr_player_name: str | None = None,
+        capture_sequence: int | None = None,
+        captured_at_utc: datetime | None = None,
+        segment_id: int | None = None,
+        processing_delay_ms: int | None = None,
     ) -> None:
         """Append one recognized player arrival/departure notification."""
         now_utc = datetime.now(timezone.utc)
@@ -7715,10 +7798,21 @@ class StampCodeArchive:
                     ).isoformat(timespec="milliseconds"),
                     "status": "player_room_status",
                     "player_name": player_name,
+                    "ocr_player_name": ocr_player_name or player_name,
                     "visit_index_for_player": visit_index_for_player,
                     "notification_status": notification_status,
                     "room_status": room_status,
                     "action": action,
+                    "capture_sequence": capture_sequence,
+                    "capture_time": (
+                        captured_at_utc.astimezone(BEIJING_TIMEZONE)
+                        .replace(tzinfo=None)
+                        .isoformat(timespec="milliseconds")
+                        if captured_at_utc is not None
+                        else None
+                    ),
+                    "segment_id": segment_id,
+                    "processing_delay_ms": processing_delay_ms,
                     "room_players": [
                         {"name": name, "status": status}
                         for name, status in room_players
@@ -7914,20 +8008,77 @@ class RoomPlayerTracker:
         self._round_player_entries = 0
         self._round_player_entry_failures = 0
         self._previous_round_player_entries = 0
+        self._last_event_sequence_by_player: dict[str, int] = {}
+        self._left_sequence_by_player: dict[str, int] = {}
 
-    def _canonical_name_locked(self, player_name: str) -> str:
+    def _canonical_name_locked(
+        self,
+        player_name: str,
+        status: str,
+    ) -> str:
+        folded_name = player_name.casefold()
+        candidate_names = list(self._players)
+        for departed_name in self._left_sequence_by_player:
+            if departed_name not in self._players:
+                candidate_names.append(departed_name)
+        for existing_name in candidate_names:
+            if existing_name.casefold() == folded_name:
+                return existing_name
+
+        containment_pool = (
+            candidate_names
+            if status == "left"
+            else (
+                list(self._left_sequence_by_player)
+                if status == "arrived"
+                else []
+            )
+        )
+        if containment_pool:
+            # Leave banners can be very short.  OCR may preserve only the
+            # first/last glyph (百變怪 -> 百, 哈哈 -> 哈).  A unique containment
+            # match among players actually in this room is stronger evidence
+            # than the symmetric SequenceMatcher ratio, which unfairly
+            # penalizes a correctly recognized but truncated name.
+            containment_matches = [
+                existing_name
+                for existing_name in containment_pool
+                if (
+                    folded_name in existing_name.casefold()
+                    or existing_name.casefold() in folded_name
+                )
+            ]
+            if len(containment_matches) == 1:
+                return containment_matches[0]
+            if len(containment_matches) > 1:
+                # A one-glyph OCR result must never guess between multiple
+                # live players that all contain that glyph.
+                return player_name
+
         best_name = player_name
         best_ratio = 0.0
-        for existing_name in self._players:
+        second_ratio = 0.0
+        for existing_name in candidate_names:
             ratio = difflib.SequenceMatcher(
                 None,
-                player_name.casefold(),
+                folded_name,
                 existing_name.casefold(),
             ).ratio()
             if ratio > best_ratio:
+                second_ratio = best_ratio
                 best_name = existing_name
                 best_ratio = ratio
-        return best_name if best_ratio >= 0.78 else player_name
+            elif ratio > second_ratio:
+                second_ratio = ratio
+        if best_ratio >= 0.78:
+            return best_name
+        if (
+            status == "left"
+            and best_ratio >= 0.60
+            and best_ratio - second_ratio >= 0.15
+        ):
+            return best_name
+        return player_name
 
     def apply(
         self,
@@ -7935,6 +8086,10 @@ class RoomPlayerTracker:
         status: str,
         *,
         expected_generation: int | None = None,
+        capture_sequence: int | None = None,
+        captured_at_utc: datetime | None = None,
+        segment_id: int | None = None,
+        processing_delay_ms: int | None = None,
     ) -> bool:
         if status not in self._NOTIFICATION_TEXT:
             return False
@@ -7946,9 +8101,47 @@ class RoomPlayerTracker:
                 return False
             if self._showing_disconnected_room:
                 return False
-            canonical_name = self._canonical_name_locked(player_name)
+            canonical_name = self._canonical_name_locked(player_name, status)
+            if status == "left" and canonical_name != player_name:
+                _timestamped_log(
+                    "离开通知玩家名自动匹配："
+                    f"OCR={player_name!r} → 房间内={canonical_name!r}。"
+                )
+            if capture_sequence is not None:
+                sequence = int(capture_sequence)
+                previous_sequence = self._last_event_sequence_by_player.get(
+                    canonical_name,
+                    0,
+                )
+                if sequence <= previous_sequence:
+                    _timestamped_log(
+                        "拒绝玩家陈旧事件："
+                        f"{canonical_name}/{status} capture_sequence="
+                        f"{sequence} <= {previous_sequence}。"
+                    )
+                    return False
+                if (
+                    status == "arrived"
+                    and canonical_name in self._left_sequence_by_player
+                ):
+                    self._last_event_sequence_by_player[
+                        canonical_name
+                    ] = sequence
+                    _timestamped_log(
+                        "拒绝离开后的迟到抵达事件："
+                        f"{canonical_name} capture_sequence={sequence}；"
+                        "必须先识别到更新的即将抵达。"
+                    )
+                    return False
+                if status == "incoming":
+                    self._left_sequence_by_player.pop(
+                        canonical_name,
+                        None,
+                    )
             previous_status = self._players.get(canonical_name)
-            now_utc = datetime.now(timezone.utc)
+            now_utc = captured_at_utc or datetime.now(timezone.utc)
+            if now_utc.tzinfo is None:
+                now_utc = now_utc.replace(tzinfo=timezone.utc)
             visit_index_for_player = 0
             player_entered = False
             player_entry_failed = False
@@ -8005,6 +8198,11 @@ class RoomPlayerTracker:
                     if visit.arrived_at_utc is None:
                         self._round_player_entry_failures += 1
                         player_entry_failed = True
+            if capture_sequence is not None:
+                sequence = int(capture_sequence)
+                self._last_event_sequence_by_player[canonical_name] = sequence
+                if status == "left" and changed:
+                    self._left_sequence_by_player[canonical_name] = sequence
             snapshot = tuple(self._players.items())
         # A distinct visible notification is useful evidence even if the
         # resulting room state was already identical, so it is always logged.
@@ -8015,6 +8213,11 @@ class RoomPlayerTracker:
             room_status=room_status,
             action=action,
             room_players=snapshot,
+            ocr_player_name=player_name,
+            capture_sequence=capture_sequence,
+            captured_at_utc=captured_at_utc,
+            segment_id=segment_id,
+            processing_delay_ms=processing_delay_ms,
         )
         if player_entered:
             count = self._run_counter.record_player_entered()
@@ -8116,6 +8319,8 @@ class RoomPlayerTracker:
             self._visit_counts_by_player.clear()
             self._round_player_entries = 0
             self._round_player_entry_failures = 0
+            self._last_event_sequence_by_player.clear()
+            self._left_sequence_by_player.clear()
         _timestamped_log(
             "检测到新CODE：已切回房间内玩家，并清空上一房间列表。"
         )
@@ -8946,6 +9151,59 @@ def _single_latin_player_name_fallback(
     return ""
 
 
+def _player_name_has_multiple_visible_glyphs(
+    player_name_image: np.ndarray,
+) -> bool:
+    """Return true when orange ink cannot plausibly be one visible glyph.
+
+    This is deliberately geometry-only: player-name characters are not
+    assumed to be equal width.  Its sole purpose is to reject a one-character
+    OCR result when the untouched crop is nearly twice as wide as its glyph
+    height (for example, the complete two-character image “来须” being read
+    as only “来”).  The conservative threshold keeps genuinely wide single
+    glyphs and the dedicated uppercase-L fallback valid.
+    """
+    if player_name_image.size == 0 or player_name_image.ndim != 3:
+        return False
+    blue, green, red = cv2.split(player_name_image[:, :, :3])
+    red_i = red.astype(np.int16)
+    green_i = green.astype(np.int16)
+    orange_mask = (
+        (red > 180)
+        & (green > 70)
+        & (green < 205)
+        & (blue < 100)
+        & (red_i > green_i + 35)
+    )
+    rows, columns = np.where(orange_mask)
+    if rows.size < 24:
+        return False
+    ink_width = int(columns.max() - columns.min() + 1)
+    ink_height = int(rows.max() - rows.min() + 1)
+    return ink_height > 0 and ink_width / ink_height >= 1.45
+
+
+def _player_name_candidate_is_complete(
+    text_value: str,
+    multiple_visible_glyphs: bool,
+) -> bool:
+    """Prevent a visibly multi-glyph name from collapsing to one codepoint."""
+    if not text_value:
+        return False
+    return not (multiple_visible_glyphs and len(text_value) == 1)
+
+
+def _player_name_character_count(text_value: str) -> int:
+    """Count visible name characters without assuming equal glyph widths."""
+    return sum(
+        1
+        for character in text_value
+        if character != "\u200d"
+        and not unicodedata.combining(character)
+        and not 0xFE00 <= ord(character) <= 0xFE0F
+    )
+
+
 def _player_rapidocr_engine():
     """Lazily create the independent generic player-name OCR engine."""
     global _PLAYER_RAPIDOCR_ENGINE
@@ -9059,25 +9317,29 @@ def _recognize_player_name_variants(
 ) -> tuple[str, float, str]:
     """Use generic OCR first, then Windows OCR; combine variant consensus."""
     observations: list[tuple[str, float, str]] = []
+    rejected_observations: list[tuple[str, float, str]] = []
+    multiple_visible_glyphs = bool(
+        variants
+        and _player_name_has_multiple_visible_glyphs(variants[0][1])
+    )
     for variant_name, image in variants:
         for text_value, confidence in _rapidocr_player_candidates(image):
-            observations.append(
-                (text_value, float(confidence), f"rapid/{variant_name}")
+            observation = (
+                text_value,
+                float(confidence),
+                f"rapid/{variant_name}",
             )
-        # Original and orange-soft usually agree.  Once two independent
-        # variants produce the same normalized name, a third ONNX inference
-        # adds little evidence but consumes another full CPU burst.
-        if len(observations) >= 2:
-            interim_groups: dict[str, set[str]] = {}
-            for text_value, _, source in observations:
-                interim_groups.setdefault(text_value.casefold(), set()).add(
-                    source
-                )
-            if any(
-                len(sources) >= 2
-                for sources in interim_groups.values()
+            if _player_name_candidate_is_complete(
+                text_value,
+                multiple_visible_glyphs,
             ):
-                break
+                observations.append(observation)
+            else:
+                rejected_observations.append(observation)
+        # Always run all three RapidOCR variants.  Two variants can agree on
+        # a truncated suffix such as “彩彩” while the remaining orange-mask
+        # variant has already recovered the full “八彩彩”.  Stopping on early
+        # consensus would permanently discard the longest available name.
 
     generic_groups: dict[str, list[tuple[str, float, str]]] = {}
     for observation in observations:
@@ -9108,16 +9370,85 @@ def _recognize_player_name_variants(
                     text_value = _normalize_player_ocr_text(
                         _macro6_windows_ocr(image_path, language_tag)
                     )
-                    if text_value:
-                        observations.append(
-                            (
-                                text_value,
-                                0.45,
-                                f"windows-{language_tag}/{variant_name}",
-                            )
-                        )
+                    if not text_value:
+                        continue
+                    observation = (
+                        text_value,
+                        0.45,
+                        f"windows-{language_tag}/{variant_name}",
+                    )
+                    if _player_name_candidate_is_complete(
+                        text_value,
+                        multiple_visible_glyphs,
+                    ):
+                        observations.append(observation)
+                    else:
+                        rejected_observations.append(observation)
+
+    # Completeness is relative to the actual candidates as well as the coarse
+    # orange geometry.  If any OCR route recovered more visible characters,
+    # every shorter result is incomplete even when it contains two or more
+    # characters.  This deliberately uses character count, never fixed glyph
+    # widths: “八彩彩” outranks “彩彩” and “八” regardless of their pixel sizes.
+    all_observations = observations + rejected_observations
+    if all_observations:
+        longest_character_count = max(
+            _player_name_character_count(item[0])
+            for item in all_observations
+        )
+        shorter_observations = [
+            item
+            for item in observations
+            if _player_name_character_count(item[0])
+            < longest_character_count
+        ]
+        if shorter_observations:
+            observations = [
+                item
+                for item in observations
+                if _player_name_character_count(item[0])
+                == longest_character_count
+            ]
+            rejected_observations.extend(shorter_observations)
     if not observations:
-        return "", 0.0, ""
+        if rejected_observations:
+            # Every OCR route saw less text than the orange geometry implies.
+            # Prefer a partial room update over dropping the notification
+            # entirely, but select the most complete/consistent candidate and
+            # leave the existing two-frame event vote in force.  A complete
+            # candidate always wins earlier and never reaches this fallback.
+            rejected_groups: dict[
+                str, list[tuple[str, float, str]]
+            ] = {}
+            for observation in rejected_observations:
+                rejected_groups.setdefault(
+                    observation[0].casefold(), []
+                ).append(observation)
+            winner = max(
+                rejected_groups.values(),
+                key=lambda group: (
+                    _player_name_character_count(group[0][0]),
+                    len({item[2] for item in group}),
+                    max(item[1] for item in group),
+                ),
+            )
+            best = max(winner, key=lambda item: item[1])
+            confidence = float(best[1])
+            if len({item[2] for item in winner}) >= 2:
+                confidence = max(confidence, 0.90)
+            diagnostics = ", ".join(
+                f"{source}={text_value}({score:.2f}, incomplete)"
+                for text_value, score, source in rejected_observations
+            )
+            diagnostics += (
+                f", incomplete-fallback={best[0]}({confidence:.2f})"
+            )
+            return best[0], confidence, diagnostics
+        diagnostics = ", ".join(
+            f"{source}={text_value}({score:.2f}, incomplete)"
+            for text_value, score, source in rejected_observations
+        )
+        return "", 0.0, diagnostics
 
     grouped: dict[str, list[tuple[str, float, str]]] = {}
     for observation in observations:
@@ -9125,9 +9456,9 @@ def _recognize_player_name_variants(
     winner = max(
         grouped.values(),
         key=lambda group: (
+            _player_name_character_count(group[0][0]),
             len({item[2] for item in group}),
             max(item[1] for item in group),
-            len(group[0][0]),
         ),
     )
     best = max(winner, key=lambda item: item[1])
@@ -9138,7 +9469,31 @@ def _recognize_player_name_variants(
         f"{source}={text_value}({score:.2f})"
         for text_value, score, source in observations
     )
+    if rejected_observations:
+        rejected_diagnostics = ", ".join(
+            f"{source}={text_value}({score:.2f}, incomplete)"
+            for text_value, score, source in rejected_observations
+        )
+        diagnostics = f"{diagnostics}, {rejected_diagnostics}"
     return best[0], confidence, diagnostics
+
+
+@dataclass(frozen=True)
+class _PlayerBannerCapture:
+    sequence: int
+    captured_at_utc: datetime
+    captured_monotonic: float
+    crop: np.ndarray
+    source_height: int
+    source_width: int
+    room_generation: int
+
+
+@dataclass(frozen=True)
+class _PlayerOcrWork:
+    capture: _PlayerBannerCapture
+    sample: tuple[str, np.ndarray, float, tuple[str, int, int]]
+    segment_id: int
 
 
 class PlayerNotificationRecognizer:
@@ -9166,6 +9521,8 @@ class PlayerNotificationRecognizer:
         self._active_segment_id: int | None = None
         self._next_segment_id = 0
         self._active_segment_frames = 0
+        self._next_capture_sequence = 0
+        self._last_applied_capture_sequence = 0
         self._segment_vote_counts: dict[
             int, dict[tuple[str, str], int]
         ] = {}
@@ -9357,17 +9714,38 @@ class PlayerNotificationRecognizer:
             # “即将抵达。” is consistently wider than both three-character
             # statuses.  Width is stable even when transition antialiasing
             # makes its normalized glyph bitmap resemble “已抵达。” briefly.
-            best_index = PLAYER_STATUS_LABELS.index("incoming")
+            incoming_index = PLAYER_STATUS_LABELS.index("incoming")
             competing_indices = tuple(
                 index
                 for index, label in enumerate(PLAYER_STATUS_LABELS)
                 if label != "incoming"
             )
-            margin = min(
-                float(scores[index] - scores[best_index])
-                for index in competing_indices
+            best_other_index = min(
+                competing_indices,
+                key=lambda index: float(scores[index]),
             )
-            best_score = float(scores[best_index])
+            # A partially faded short status can acquire a wide gray tail.
+            # Let a clearly superior fixed glyph template override width;
+            # this repairs “呆呆 已抵达。” without weakening true incoming
+            # samples, whose incoming-template errors are near zero.
+            if (
+                float(scores[best_other_index]) <= 0.30
+                and float(
+                    scores[incoming_index] - scores[best_other_index]
+                ) >= 0.06
+            ):
+                best_index = int(best_other_index)
+                best_score = float(scores[best_index])
+                margin = float(
+                    scores[incoming_index] - scores[best_index]
+                )
+            else:
+                best_index = incoming_index
+                best_score = float(scores[best_index])
+                margin = min(
+                    float(scores[index] - scores[best_index])
+                    for index in competing_indices
+                )
             if best_score > 0.43:
                 return None
         elif 40 <= status_width <= 55:
@@ -9558,14 +9936,17 @@ class PlayerNotificationRecognizer:
         room_generation = self._tracker.generation()
         start_analysis = False
         with self._lock:
-            self._analysis_queue.append(
-                (
-                    banner_crop,
-                    source_height,
-                    source_width,
-                    room_generation,
-                )
+            self._next_capture_sequence += 1
+            capture = _PlayerBannerCapture(
+                sequence=self._next_capture_sequence,
+                captured_at_utc=datetime.now(timezone.utc),
+                captured_monotonic=now,
+                crop=banner_crop,
+                source_height=source_height,
+                source_width=source_width,
+                room_generation=room_generation,
             )
+            self._analysis_queue.append(capture)
             if not self._analysis_busy:
                 self._analysis_busy = True
                 start_analysis = True
@@ -9583,24 +9964,19 @@ class PlayerNotificationRecognizer:
                 if not self._analysis_queue:
                     self._analysis_busy = False
                     return
-                (
-                    banner_crop,
-                    source_height,
-                    source_width,
-                    room_generation,
-                ) = self._analysis_queue.popleft()
+                capture = self._analysis_queue.popleft()
             try:
                 sample = self._extract_banner(
-                    banner_crop,
-                    source_height,
-                    source_width,
+                    capture.crop,
+                    capture.source_height,
+                    capture.source_width,
                 )
                 recycle_box_notice = (
                     sample is None
                     and self._is_recycle_box_notice(
-                        banner_crop,
-                        source_height,
-                        source_width,
+                        capture.crop,
+                        capture.source_height,
+                        capture.source_width,
                     )
                 )
             except Exception as exc:
@@ -9667,7 +10043,11 @@ class PlayerNotificationRecognizer:
                     continue
                 self._active_segment_frames += 1
                 self._work_queue.append(
-                    (sample, room_generation, segment_id)
+                    _PlayerOcrWork(
+                        capture=capture,
+                        sample=sample,
+                        segment_id=segment_id,
+                    )
                 )
                 if not self._busy:
                     self._busy = True
@@ -9686,8 +10066,9 @@ class PlayerNotificationRecognizer:
                 if not self._work_queue:
                     self._busy = False
                     return
-                queued = self._work_queue.popleft()
-                sample, room_generation, segment_id = queued
+                work = self._work_queue.popleft()
+                sample = work.sample
+                segment_id = work.segment_id
                 if segment_id in self._accepted_segment_ids:
                     continue
             status, player_name_crop, status_score, visual_signature = sample
@@ -9710,15 +10091,21 @@ class PlayerNotificationRecognizer:
                         "检测到玩家通知，但通用OCR和Windows OCR均未取得"
                         "玩家名；保留最新横幅并继续重试。"
                     )
+                    if diagnostics:
+                        _timestamped_log(f"玩家名OCR候选：{diagnostics}")
                     continue
                 event = (player_name.casefold(), status)
                 with self._lock:
                     if event == self._last_accepted_event:
+                        self._last_applied_capture_sequence = max(
+                            self._last_applied_capture_sequence,
+                            work.capture.sequence,
+                        )
                         self._accepted_segment_ids.add(segment_id)
                         self._work_queue = deque(
                             item
                             for item in self._work_queue
-                            if item[2] != segment_id
+                            if item.segment_id != segment_id
                         )
                         continue
                     votes = self._segment_vote_counts.setdefault(
@@ -9728,6 +10115,27 @@ class PlayerNotificationRecognizer:
                     vote_count = votes[event]
                     if vote_count < 2:
                         continue
+                    if (
+                        work.capture.sequence
+                        <= self._last_applied_capture_sequence
+                    ):
+                        self._accepted_segment_ids.add(segment_id)
+                        self._segment_vote_counts.pop(segment_id, None)
+                        self._work_queue = deque(
+                            item
+                            for item in self._work_queue
+                            if item.segment_id != segment_id
+                        )
+                        _timestamped_log(
+                            "丢弃乱序玩家通知："
+                            f"capture_sequence={work.capture.sequence}，"
+                            "不晚于已应用序号"
+                            f"{self._last_applied_capture_sequence}。"
+                        )
+                        continue
+                    self._last_applied_capture_sequence = (
+                        work.capture.sequence
+                    )
                     self._last_accepted_event = event
                     self._accepted_segment_ids.add(segment_id)
                     self._segment_vote_counts.pop(segment_id, None)
@@ -9737,7 +10145,7 @@ class PlayerNotificationRecognizer:
                     self._work_queue = deque(
                         item
                         for item in self._work_queue
-                        if item[2] != segment_id
+                        if item.segment_id != segment_id
                     )
                     if len(self._accepted_segment_ids) > 256:
                         cutoff = self._next_segment_id - 128
@@ -9750,14 +10158,31 @@ class PlayerNotificationRecognizer:
                 _timestamped_log(
                     f"玩家通知识别：{player_name} / {status} "
                     f"(status_score={status_score:.3f}, "
-                    f"name_confidence={confidence:.3f}, votes={vote_count})。"
+                    f"name_confidence={confidence:.3f}, votes={vote_count}, "
+                    f"capture_sequence={work.capture.sequence}, "
+                    f"segment_id={segment_id}, "
+                    "processing_delay_ms="
+                    f"{max(0, round((time.monotonic() - work.capture.captured_monotonic) * 1000))})。"
                 )
                 if diagnostics:
                     _timestamped_log(f"玩家名OCR候选：{diagnostics}")
                 self._tracker.apply(
                     player_name,
                     status,
-                    expected_generation=room_generation,
+                    expected_generation=work.capture.room_generation,
+                    capture_sequence=work.capture.sequence,
+                    captured_at_utc=work.capture.captured_at_utc,
+                    segment_id=segment_id,
+                    processing_delay_ms=max(
+                        0,
+                        round(
+                            (
+                                time.monotonic()
+                                - work.capture.captured_monotonic
+                            )
+                            * 1000
+                        ),
+                    ),
                 )
             except Exception as exc:
                 _timestamped_log(f"玩家通知识别失败：{exc}")
@@ -10672,6 +11097,7 @@ def main() -> int:
             "P=暂停/恢复；Q/Esc=退出。\n"
             "玩家动态识别：即将抵达=路上；已抵达=到达；"
             "回去了=从房间列表移除。\n"
+            "手柄保活：连续300秒无实际手柄输入时自动按上、下各一次。\n"
             "执行期间新的 1/2/3/4 会被丢弃；"
             "普通手动控制键在宏执行期间仍然有效。"
             "外层防卡死监控已启用：宏线程或采集画面无响应时会完整重启；"

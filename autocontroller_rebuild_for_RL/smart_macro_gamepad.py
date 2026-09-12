@@ -867,22 +867,27 @@ def _run_smart_macro_5_loop(
         context.complete_macro_loop()
 
 
-def _run_smart_macro_6_part_1(context: _MacroContext) -> bool:
+def _run_smart_macro_6_part_1(
+    context: _MacroContext,
+    *,
+    start_at_home: bool = False,
+) -> bool:
     """Smart Macro6 独立第一段：Pokopia 更新梦幻章车轮次。"""
-    for direction in (
-        BIT_LSTICK_UP,
-        BIT_LSTICK_DOWN,
-        BIT_LSTICK_LEFT,
-        BIT_LSTICK_RIGHT,
-    ):
-        if not context.move_stick(direction, duration_ms=100):
+    if not start_at_home:
+        for direction in (
+            BIT_LSTICK_UP,
+            BIT_LSTICK_DOWN,
+            BIT_LSTICK_LEFT,
+            BIT_LSTICK_RIGHT,
+        ):
+            if not context.move_stick(direction, duration_ms=100):
+                return False
+        context.center_stick()
+        if not context.wait_ms(3000):
             return False
-    context.center_stick()
-    if not context.wait_ms(3000):
-        return False
-    for _ in range(6):
-        if not context.tap(BIT_B, hold_ms=50, gap_ms=500):
-            return False
+        for _ in range(6):
+            if not context.tap(BIT_B, hold_ms=50, gap_ms=500):
+                return False
 
     first_steps = (
         (BIT_PLUS, 500),
@@ -906,6 +911,10 @@ def _run_smart_macro_6_part_1(context: _MacroContext) -> bool:
         (BIT_DPAD_UP, 500),
         (BIT_A, 0),
     )
+    if start_at_home:
+        # A network-error popup needs none of the normal pre-HOME escape
+        # inputs. Resume at the first HOME of the read/load sequence.
+        first_steps = first_steps[4:]
     for bit_index, gap_ms in first_steps:
         if not context.tap(bit_index, hold_ms=50, gap_ms=gap_ms):
             return False

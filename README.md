@@ -38,6 +38,22 @@ python -m pip install --upgrade pip
 python -m pip install --user -r requirements.txt
 ```
 
+玩家姓名识别使用 PaddleOCR 官方 `PP-OCRv6_medium_rec`。正常情况下直接执行上面的
+`python -m pip install --user -r requirements.txt` 即可完整安装。如果常规 PyPI 网络
+无法取得 Windows CPU 版 PaddlePaddle，才需要先按飞桨官方源安装，再安装项目依赖：
+
+```cmd
+python -m pip install paddlepaddle==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+python -m pip install --user -r requirements.txt
+```
+
+模型权重会在第一次使用时从飞桨官方 BOS 自动下载。可在项目根目录用一张已经裁剪好的
+玩家姓名图片单独测试；该命令只输出模型识别到的姓名文字：
+
+```cmd
+python .\autocontroller_rebuild_for_RL\player_name_recognizer.py .\pokopia_stamp_records\Name\示例.png
+```
+
 如果电脑中安装了多个 Python，且 `python --version` 不是 3.13，可以临时使用 Python Launcher 指定版本：
 
 ```cmd
@@ -76,6 +92,13 @@ winget list --id Gyan.FFmpeg
 ```
 
 如果能够查到 FFmpeg 但命令仍不可用，请重启 Windows 以刷新 PATH。普通 `macro_gamepad.py` 不使用视频流，因此不需要 FFmpeg 或采集卡。
+
+## Pokopia 实时状态页
+
+本机预览与Macro6一起启动时，双击根目录 `run_pokopia_web_and_watchdog.bat`。
+正式公网方案使用Windows主动推送到Cloudflare边缘，不开放家庭路由器端口；首次部署双击
+`deploy_pokopia_cloudflare.bat`。域名、资源创建、安全边界和验收步骤见
+`autocontroller_rebuild_for_RL/POKOPIA_WEB_DEPLOYMENT.md`。
 
 也可以使用其他包管理器安装：
 

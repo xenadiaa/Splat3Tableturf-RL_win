@@ -67,10 +67,19 @@ from autocontroller_rebuild_for_RL.macro_gamepad import (
 )
 from autocontroller_rebuild_for_RL.smart_macro_gamepad import (
     _read_posix_terminal_key,
-    _run_smart_macro_6_part_1,
 )
 from autocontroller_rebuild_for_RL.chrome_code_input import (
     input_code_to_chrome,
+)
+from autocontroller_rebuild_for_RL.player_name_recognizer import (
+    PLAYER_NAME_MODEL,
+    PlayerNameRecognizerUnavailable,
+    recognize_player_name,
+    repair_player_name_right_edge,
+    warm_up_player_name_recognizer,
+)
+from autocontroller_rebuild_for_RL.pokopia_web_state import (
+    PokopiaWebStatePublisher,
 )
 from switch_connect.virtual_gamepad.input_mapper import (
     BIT_A,
@@ -80,7 +89,11 @@ from switch_connect.virtual_gamepad.input_mapper import (
     BIT_DPAD_RIGHT,
     BIT_DPAD_UP,
     BIT_HOME,
+    BIT_LSTICK_DOWN,
+    BIT_LSTICK_LEFT,
+    BIT_LSTICK_RIGHT,
     BIT_LSTICK_UP,
+    BIT_MINUS,
     BIT_PLUS,
 )
 from vision_capture.adapter import (
@@ -111,7 +124,7 @@ CAPTURE_FALLBACK_SPECS = (
 MACRO_HEARTBEAT_TIMEOUT_SECONDS = 45.0
 CAPTURE_HEARTBEAT_TIMEOUT_SECONDS = 15.0
 RESTART_DELAY_SECONDS = 3.0
-MACRO6_BUILD_ID = "v1.12"
+MACRO6_BUILD_ID = "v1.43"
 SUPERVISED_CHILD_ENV = "MACRO6_SUPERVISED_CHILD"
 MACRO_HEARTBEAT_ENV = "MACRO6_MACRO_HEARTBEAT"
 CAPTURE_HEARTBEAT_ENV = "MACRO6_CAPTURE_HEARTBEAT"
@@ -120,6 +133,7 @@ CODE_ARCHIVE_DIRNAME = "pokopia_stamp_records"
 CODE_TIMER_RESTART_SECONDS = 15 * 60
 SEVERE_CODE_TIMER_RESTART_SECONDS = 30 * 60
 CODE_OCR_TIMEOUT_SECONDS = 3 * 60
+CONNECT_OK_CODE_RETRY_SECONDS = 30.0
 CONTROLLER_IDLE_KEEPALIVE_SECONDS = 5 * 60
 CONTROLLER_IDLE_KEEPALIVE_HOLD_MS = 50
 CONTROLLER_IDLE_KEEPALIVE_GAP_MS = 100
@@ -338,6 +352,17 @@ REWARD_ROI = (0.400, 0.150, 0.590, 0.260)
 # and right edges move with proportional text width.  Count horizontal text
 # bands across a wide central region instead of sampling fixed x positions.
 REWARD_LIST_ROI = (0.250, 0.340, 0.800, 0.620)
+NETWORK_ERROR_CLOSE_ROI = (0.325, 0.650, 0.400, 0.735)
+NETWORK_ERROR_CLOSE_TEMPLATE_SHAPE = (48, 96)
+NETWORK_ERROR_CLOSE_MIN_DICE = 0.78
+NETWORK_ERROR_CONFIRM_FRAMES = 2
+# Neutral-white “关闭” glyph mask from the fixed lower-left button in
+# SCREENSHOT_20260831T103601_694441Z.  Runtime recognition is self-contained;
+# the source screenshot is not opened by watchdog.
+NETWORK_ERROR_CLOSE_MASK_ZLIB_BASE64 = (
+    "eNpjYBhWgJGRoQGJnf4fxmEH8qFM+f8fGRph4gKMDA8R7PqfCDZjI0I9nM1QwcgG"
+    "Z2cwSsDZbYwFMDY7YyM7jC3H8BFkNRQYMvAxDDMAACVUEAI="
+)
 PLAYER_NOTIFICATION_ROI = (0.580, 0.035, 0.998, 0.100)
 PLAYER_CONNECTION_ICON_ROI = (0.535, 0.018, 0.590, 0.115)
 # The globe is also used for fixed system notices.  This tight region covers
@@ -355,6 +380,14 @@ PLAYER_NOTIFICATION_FINGERPRINT_MAX_CHANGE_RATIO = 0.04
 PLAYER_NOTIFICATION_FINGERPRINT_MAX_BIT_CHANGES = 12
 PLAYER_OCR_INTRA_OP_THREADS = 1
 PLAYER_OCR_INTER_OP_THREADS = 1
+# Compact four-bit glyph atlas learned per character, never per player name.
+# It covers repeated full-width glyph shapes present in the verification set;
+# unknown glyphs fall through to the general OCR ensemble.
+PLAYER_NAME_GLYPH_LABELS = "百变小樱蕾梅黛丝波寶貝晃哈是我啦怪十一号吱佳"
+PLAYER_NAME_GLYPH_SHAPE = (32, 24)
+PLAYER_NAME_GLYPH_ATLAS_ZLIB_BASE64 = (
+    "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"
+)
 PLAYER_CONNECTION_ICON_SHAPE = (48, 48)
 PLAYER_CONNECTION_ICON_MAP_ZLIB_BASE64 = (
     "eNpjYBipgFFJSQCLsFjP3bsnEjGFz705c+bcG3QJxnXXDRkYhGt/oRnl81KBASjEfH4hqvL1jQxsDeoCghovYRoYQYTkC5EA2wm2"
@@ -517,7 +550,7 @@ _CODE_GLYPH_TEMPLATE_ASPECT_ZLIB_BASE64 = (
 )
 CURSOR_CORRECTION_INTERVAL_SECONDS = 3.0
 CURSOR_INVALID_GRACE_SECONDS = 0.75
-STAMP_CHECK_INTERVAL_SECONDS = 10.0
+STAMP_CHECK_INTERVAL_SECONDS = 7.0
 STAMP_PAGE_OPEN_DELAY_SECONDS = 2.0
 CODE_CHIME_REPEAT_COUNT = 3
 _CODE_CHIME_LOCK = threading.Lock()
@@ -5509,6 +5542,10 @@ class _CodeRecognitionTimedOut(Exception):
     """Restart after a visible CODE panel yields no new six-character CODE."""
 
 
+class _NetworkConnectionError(Exception):
+    """Restart an open round after the Switch connection-error popup."""
+
+
 class _NeverExpireCodeTimer:
     """Use shared STAMP navigation without enabling Macro1's 15m restart."""
 
@@ -5535,6 +5572,12 @@ class _CursorGatedCodeTimer:
         self.last_trigger_reason = ""
         self._observed_operational_date = _beijing_operational_date()
         self._last_code_revision = code_recognizer.revision()
+        network_visible, network_revision = (
+            visual_state.network_error_state()
+        )
+        self._last_network_error_revision = network_revision - int(
+            network_visible
+        )
         elapsed = code_recognizer.timer_elapsed_seconds()
         self._severe_anchor_monotonic = time.monotonic() - (
             elapsed if elapsed is not None else 0.0
@@ -5544,6 +5587,9 @@ class _CursorGatedCodeTimer:
         """Enable the timer after a CODE is ready for stamp checking."""
         self._armed = True
         self.last_trigger_cursor = "INVALID"
+        _, self._last_network_error_revision = (
+            self._visual_state.network_error_state()
+        )
 
     def disarm(self) -> None:
         """Suppress stale timer expiry throughout read/load/restart work."""
@@ -5558,6 +5604,19 @@ class _CursorGatedCodeTimer:
         #     self._observed_operational_date = current_date
         #     self.last_trigger_reason = "business_date_changed"
         #     return True
+
+        # A complete read/load/reopen is already the recovery action.  While
+        # disarmed, no timer-derived exception may interrupt it and inject a
+        # second restart.  Revision/severe-anchor synchronization is deferred
+        # until arm() and the first STAMP-loop check after the new CODE.
+        if not self._armed:
+            return False
+
+        _, network_revision = self._visual_state.network_error_state()
+        if network_revision > self._last_network_error_revision:
+            self._last_network_error_revision = network_revision
+            self.last_trigger_reason = "network_connection_error"
+            return True
 
         revision = self._code_recognizer.revision()
         if revision != self._last_code_revision:
@@ -5577,13 +5636,39 @@ class _CursorGatedCodeTimer:
             self.last_trigger_reason = "severe_timeout"
             return True
 
-        if not self._armed or not self._code_recognizer.timer_expired():
+        if not self._code_recognizer.timer_expired():
             return False
         cursor = self._visual_state.cursor()
         if cursor == "INVALID":
             return False
         self.last_trigger_cursor = cursor
         self.last_trigger_reason = "cursor_timeout"
+        return True
+
+
+class _NetworkConnectionErrorGuard:
+    """Expose only a new connection-error popup through the shared guard."""
+
+    def __init__(self, visual_state: _PokopiaVisualState) -> None:
+        self._visual_state = visual_state
+        self._armed = True
+        self.last_trigger_reason = ""
+        visible, revision = visual_state.network_error_state()
+        self._last_revision = revision - int(visible)
+
+    def arm(self) -> None:
+        self._armed = True
+        _, self._last_revision = self._visual_state.network_error_state()
+
+    def disarm(self) -> None:
+        self._armed = False
+
+    def timer_expired(self) -> bool:
+        _, revision = self._visual_state.network_error_state()
+        if not self._armed or revision <= self._last_revision:
+            return False
+        self._last_revision = revision
+        self.last_trigger_reason = "network_connection_error"
         return True
 
 
@@ -5610,6 +5695,18 @@ class Macro6RunCounter:
         self._total_player_entries = 0
         self._daily_player_entry_failures: dict[str, int] = {}
         self._total_player_entry_failures = 0
+        self._daily_player_visits: dict[str, dict[str, int]] = {}
+        self._total_player_visits: dict[str, int] = {}
+        self._daily_player_completed_tasks: dict[str, dict[str, int]] = {}
+        self._total_player_completed_tasks: dict[str, int] = {}
+        self._daily_player_returned_before_arrival: dict[
+            str, dict[str, int]
+        ] = {}
+        self._total_player_returned_before_arrival: dict[str, int] = {}
+        self._daily_player_room_closed_before_arrival: dict[
+            str, dict[str, int]
+        ] = {}
+        self._total_player_room_closed_before_arrival: dict[str, int] = {}
         self._load()
 
     @staticmethod
@@ -5663,14 +5760,279 @@ class Macro6RunCounter:
                 int(raw.get("total_player_entry_failures", 0)),
                 sum(self._daily_player_entry_failures.values()),
             )
+
+            def nested_player_counts(key: str) -> dict[str, dict[str, int]]:
+                value = raw.get(key, {})
+                if not isinstance(value, dict):
+                    raise ValueError(f"{key} must be an object")
+                result: dict[str, dict[str, int]] = {}
+                for date, players in value.items():
+                    if not isinstance(players, dict):
+                        continue
+                    cleaned = {
+                        str(name): max(0, int(count))
+                        for name, count in players.items()
+                        if str(name).strip()
+                    }
+                    if cleaned:
+                        result[str(date)] = cleaned
+                return result
+
+            def total_player_counts(
+                key: str,
+                daily: dict[str, dict[str, int]],
+            ) -> dict[str, int]:
+                value = raw.get(key, {})
+                if not isinstance(value, dict):
+                    raise ValueError(f"{key} must be an object")
+                stored = {
+                    str(name): max(0, int(count))
+                    for name, count in value.items()
+                    if str(name).strip()
+                }
+                summed: dict[str, int] = {}
+                for players in daily.values():
+                    for name, count in players.items():
+                        summed[name] = summed.get(name, 0) + count
+                return {
+                    name: max(stored.get(name, 0), summed.get(name, 0))
+                    for name in set(stored) | set(summed)
+                }
+
+            self._daily_player_visits = nested_player_counts(
+                "daily_player_visits"
+            )
+            self._total_player_visits = total_player_counts(
+                "total_player_visits",
+                self._daily_player_visits,
+            )
+            self._daily_player_completed_tasks = nested_player_counts(
+                "daily_player_completed_tasks"
+            )
+            self._total_player_completed_tasks = total_player_counts(
+                "total_player_completed_tasks",
+                self._daily_player_completed_tasks,
+            )
+            self._daily_player_returned_before_arrival = nested_player_counts(
+                "daily_player_returned_before_arrival"
+            )
+            self._total_player_returned_before_arrival = total_player_counts(
+                "total_player_returned_before_arrival",
+                self._daily_player_returned_before_arrival,
+            )
+            self._daily_player_room_closed_before_arrival = (
+                nested_player_counts(
+                    "daily_player_room_closed_before_arrival"
+                )
+            )
+            self._total_player_room_closed_before_arrival = (
+                total_player_counts(
+                    "total_player_room_closed_before_arrival",
+                    self._daily_player_room_closed_before_arrival,
+                )
+            )
+            migration_needed = False
+            if not any(
+                key in raw
+                for key in (
+                    "daily_player_visits",
+                    "total_player_visits",
+                    "daily_player_completed_tasks",
+                    "total_player_completed_tasks",
+                )
+            ):
+                self._backfill_player_rankings_from_room_logs()
+                migration_needed = True
+            if not any(
+                key in raw
+                for key in (
+                    "daily_player_returned_before_arrival",
+                    "total_player_returned_before_arrival",
+                    "daily_player_room_closed_before_arrival",
+                    "total_player_room_closed_before_arrival",
+                )
+            ):
+                self._backfill_player_failure_rankings_from_room_logs()
+                migration_needed = True
+            if migration_needed:
+                self._save_locked()
         except Exception as exc:
             _timestamped_log(
                 f"macro6 永久计数文件读取失败，将从0继续统计：{exc}"
             )
 
+    def _backfill_player_rankings_from_room_logs(self) -> None:
+        """One-time v7 migration from existing per-reopen player summaries."""
+        archive_root = self.path.with_name(CODE_ARCHIVE_DIRNAME)
+        if not archive_root.is_dir():
+            return
+        migrated_visits = 0
+        migrated_tasks = 0
+        for record_path in sorted(
+            archive_root.glob("STAMP_*/PLAYERS_*.jsonl")
+        ):
+            folder_name = record_path.parent.name
+            if not folder_name.startswith("STAMP_"):
+                continue
+            date_key = folder_name.removeprefix("STAMP_")
+            try:
+                with record_path.open("r", encoding="utf-8-sig") as source:
+                    records = tuple(source)
+            except OSError:
+                continue
+            for line in records:
+                try:
+                    record = json.loads(line)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if (
+                    not isinstance(record, dict)
+                    or record.get("status") != "room_reopen_summary"
+                ):
+                    continue
+                visits = record.get("players", ())
+                if not isinstance(visits, list):
+                    continue
+                for visit in visits:
+                    if (
+                        not isinstance(visit, dict)
+                        or visit.get("result") != "entered"
+                    ):
+                        continue
+                    player_name = str(visit.get("player_name", "")).strip()
+                    if not player_name:
+                        continue
+                    daily_visits = self._daily_player_visits.setdefault(
+                        date_key,
+                        {},
+                    )
+                    daily_visits[player_name] = (
+                        daily_visits.get(player_name, 0) + 1
+                    )
+                    migrated_visits += 1
+                    try:
+                        completed_tasks = min(
+                            3,
+                            max(
+                                0,
+                                int(
+                                    visit.get(
+                                        "available_reward_tasks",
+                                        visit.get(
+                                            "completed_reward_tasks",
+                                            0,
+                                        ),
+                                    )
+                                ),
+                            ),
+                        )
+                    except (TypeError, ValueError):
+                        completed_tasks = 0
+                    if completed_tasks:
+                        daily_tasks = (
+                            self._daily_player_completed_tasks.setdefault(
+                                date_key,
+                                {},
+                            )
+                        )
+                        daily_tasks[player_name] = (
+                            daily_tasks.get(player_name, 0) + completed_tasks
+                        )
+                        migrated_tasks += completed_tasks
+
+        for players in self._daily_player_visits.values():
+            for player_name, count in players.items():
+                self._total_player_visits[player_name] = (
+                    self._total_player_visits.get(player_name, 0) + count
+                )
+        for players in self._daily_player_completed_tasks.values():
+            for player_name, count in players.items():
+                self._total_player_completed_tasks[player_name] = (
+                    self._total_player_completed_tasks.get(player_name, 0)
+                    + count
+                )
+        _timestamped_log(
+            "玩家排行统计已从既有每轮日志完成一次性迁移："
+            f"来访{migrated_visits}次，参与完成任务{migrated_tasks}次。"
+        )
+
+    def _backfill_player_failure_rankings_from_room_logs(self) -> None:
+        """One-time v8 migration of named failures from room summaries."""
+        archive_root = self.path.with_name(CODE_ARCHIVE_DIRNAME)
+        if not archive_root.is_dir():
+            return
+        returned_count = 0
+        closed_count = 0
+        for record_path in sorted(
+            archive_root.glob("STAMP_*/PLAYERS_*.jsonl")
+        ):
+            folder_name = record_path.parent.name
+            if not folder_name.startswith("STAMP_"):
+                continue
+            date_key = folder_name.removeprefix("STAMP_")
+            try:
+                with record_path.open("r", encoding="utf-8-sig") as source:
+                    records = tuple(source)
+            except OSError:
+                continue
+            for line in records:
+                try:
+                    record = json.loads(line)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if (
+                    not isinstance(record, dict)
+                    or record.get("status") != "room_reopen_summary"
+                ):
+                    continue
+                visits = record.get("players", ())
+                if not isinstance(visits, list):
+                    continue
+                for visit in visits:
+                    if (
+                        not isinstance(visit, dict)
+                        or visit.get("result") != "entry_failed"
+                    ):
+                        continue
+                    player_name = str(visit.get("player_name", "")).strip()
+                    if not player_name:
+                        continue
+                    if bool(visit.get("ended_by_room_freeze", False)):
+                        daily = self._daily_player_room_closed_before_arrival
+                        closed_count += 1
+                    else:
+                        daily = self._daily_player_returned_before_arrival
+                        returned_count += 1
+                    players = daily.setdefault(date_key, {})
+                    players[player_name] = players.get(player_name, 0) + 1
+
+        for players in self._daily_player_returned_before_arrival.values():
+            for player_name, count in players.items():
+                self._total_player_returned_before_arrival[player_name] = (
+                    self._total_player_returned_before_arrival.get(
+                        player_name,
+                        0,
+                    )
+                    + count
+                )
+        for players in self._daily_player_room_closed_before_arrival.values():
+            for player_name, count in players.items():
+                self._total_player_room_closed_before_arrival[player_name] = (
+                    self._total_player_room_closed_before_arrival.get(
+                        player_name,
+                        0,
+                    )
+                    + count
+                )
+        _timestamped_log(
+            "玩家失败排行已从既有每轮日志完成一次性迁移："
+            f"到达前返回{returned_count}次，"
+            f"房间关闭时未抵达{closed_count}次。"
+        )
+
     def _save_locked(self) -> None:
         payload = {
-            "version": 6,
+            "version": 8,
             "metric": "completed_macro_code_updates",
             "timezone": "Asia/Shanghai (UTC+08:00)",
             "day_boundary": "05:00",
@@ -5686,6 +6048,40 @@ class Macro6RunCounter:
             "daily_player_entry_failures": dict(
                 sorted(self._daily_player_entry_failures.items())
             ),
+            "total_player_visits": dict(
+                sorted(self._total_player_visits.items())
+            ),
+            "daily_player_visits": {
+                date: dict(sorted(players.items()))
+                for date, players in sorted(self._daily_player_visits.items())
+            },
+            "total_player_completed_tasks": dict(
+                sorted(self._total_player_completed_tasks.items())
+            ),
+            "daily_player_completed_tasks": {
+                date: dict(sorted(players.items()))
+                for date, players in sorted(
+                    self._daily_player_completed_tasks.items()
+                )
+            },
+            "total_player_returned_before_arrival": dict(
+                sorted(self._total_player_returned_before_arrival.items())
+            ),
+            "daily_player_returned_before_arrival": {
+                date: dict(sorted(players.items()))
+                for date, players in sorted(
+                    self._daily_player_returned_before_arrival.items()
+                )
+            },
+            "total_player_room_closed_before_arrival": dict(
+                sorted(self._total_player_room_closed_before_arrival.items())
+            ),
+            "daily_player_room_closed_before_arrival": {
+                date: dict(sorted(players.items()))
+                for date, players in sorted(
+                    self._daily_player_room_closed_before_arrival.items()
+                )
+            },
             "updated_at_utc": datetime.now(timezone.utc)
             .isoformat(timespec="seconds")
             .replace("+00:00", "Z"),
@@ -5745,14 +6141,26 @@ class Macro6RunCounter:
                 _timestamped_log(f"macro6 永久计数保存失败：{exc}")
             return snapshot
 
-    def record_player_entered(self) -> RunCounterSnapshot:
+    def record_player_entered(self, player_name: str) -> RunCounterSnapshot:
         """Persist one distinct successful player arrival."""
         date_key = self._date_key()
+        normalized_name = str(player_name).strip()
         with self._lock:
             self._daily_player_entries[date_key] = (
                 self._daily_player_entries.get(date_key, 0) + 1
             )
             self._total_player_entries += 1
+            if normalized_name:
+                daily_players = self._daily_player_visits.setdefault(
+                    date_key,
+                    {},
+                )
+                daily_players[normalized_name] = (
+                    daily_players.get(normalized_name, 0) + 1
+                )
+                self._total_player_visits[normalized_name] = (
+                    self._total_player_visits.get(normalized_name, 0) + 1
+                )
             snapshot = RunCounterSnapshot(
                 operational_date=date_key,
                 daily_runs=self._daily_runs.get(date_key, 0),
@@ -5772,18 +6180,72 @@ class Macro6RunCounter:
                 _timestamped_log(f"玩家进入永久计数保存失败：{exc}")
             return snapshot
 
+    def record_player_completed_tasks(
+        self,
+        player_task_counts: dict[str, int],
+    ) -> None:
+        """Persist completed task participation for every arrived player."""
+        increments = {
+            str(name).strip(): max(0, int(count))
+            for name, count in player_task_counts.items()
+            if str(name).strip() and int(count) > 0
+        }
+        if not increments:
+            return
+        date_key = self._date_key()
+        with self._lock:
+            daily_players = self._daily_player_completed_tasks.setdefault(
+                date_key,
+                {},
+            )
+            for name, count in increments.items():
+                daily_players[name] = daily_players.get(name, 0) + count
+                self._total_player_completed_tasks[name] = (
+                    self._total_player_completed_tasks.get(name, 0) + count
+                )
+            try:
+                self._save_locked()
+            except OSError as exc:
+                _timestamped_log(f"玩家参与任务永久计数保存失败：{exc}")
+
     def record_player_entry_failures(
         self,
         amount: int = 1,
+        *,
+        player_names: tuple[str, ...] = (),
+        reason: str = "",
     ) -> RunCounterSnapshot:
         """Persist failed player visits that ended before arrival."""
         increment = max(0, int(amount))
+        normalized_names = tuple(
+            name
+            for name in (str(item).strip() for item in player_names)
+            if name
+        )
         date_key = self._date_key()
         with self._lock:
             self._daily_player_entry_failures[date_key] = (
                 self._daily_player_entry_failures.get(date_key, 0) + increment
             )
             self._total_player_entry_failures += increment
+            if reason == "left_before_arrival":
+                daily_by_name = self._daily_player_returned_before_arrival
+                total_by_name = self._total_player_returned_before_arrival
+            elif reason == "room_closed_before_arrival":
+                daily_by_name = self._daily_player_room_closed_before_arrival
+                total_by_name = self._total_player_room_closed_before_arrival
+            else:
+                daily_by_name = None
+                total_by_name = None
+            if daily_by_name is not None and total_by_name is not None:
+                daily_players = daily_by_name.setdefault(date_key, {})
+                for player_name in normalized_names:
+                    daily_players[player_name] = (
+                        daily_players.get(player_name, 0) + 1
+                    )
+                    total_by_name[player_name] = (
+                        total_by_name.get(player_name, 0) + 1
+                    )
             snapshot = RunCounterSnapshot(
                 operational_date=date_key,
                 daily_runs=self._daily_runs.get(date_key, 0),
@@ -5876,6 +6338,29 @@ class _RoundAnnouncementTracker:
         self._round_started_monotonic = None
         self._restart_started_monotonic = time.monotonic()
 
+    def mark_network_connection_error(
+        self,
+        fallback_elapsed_seconds: float | None = None,
+    ) -> None:
+        """Close the round with its elapsed time after a network popup."""
+        started_at = self._round_started_monotonic
+        if started_at is not None:
+            elapsed_seconds = max(
+                0,
+                round(time.monotonic() - started_at),
+            )
+        else:
+            elapsed_seconds = max(
+                0,
+                round(float(fallback_elapsed_seconds or 0.0)),
+            )
+        self._previous_result = _PreviousRoundResult(
+            "network_connection_error",
+            elapsed_seconds,
+        )
+        self._round_started_monotonic = None
+        self._restart_started_monotonic = time.monotonic()
+
     def begin_round(
         self,
         code: str,
@@ -5899,7 +6384,14 @@ class _RoundAnnouncementTracker:
             )
         elif previous.outcome == "severe_timeout":
             previous_line = (
-                "（严重超时，自动重开。请看到的联系群主检查问题）"
+                "（严重超时，自动重开。）"
+            )
+        elif previous.outcome == "network_connection_error":
+            elapsed = max(0, int(previous.elapsed_seconds or 0))
+            minutes, seconds = divmod(elapsed, 60)
+            previous_line = (
+                f"（上轮开放时长{minutes}分{seconds}秒，"
+                "发生网络波动断开，重新开启新的一轮）"
             )
         elif previous.outcome == "filled" and previous.elapsed_seconds is not None:
             minutes, seconds = divmod(previous.elapsed_seconds, 60)
@@ -5944,6 +6436,7 @@ class _RoundAnnouncementTracker:
                 f"预计开到盖满或[{deadline:%Y-%m-%d %H:%M:%S}]",
                 "大家把握好时间！谨防两车之间的间隙夹人！"
                 "如果确认无法进入，请私聊反馈对应密语，感谢各位协助！",
+                "可访问 rabi.date 查看",
             )
         )
 
@@ -6009,6 +6502,8 @@ class _PokopiaVisualState:
         self._able_access = False
         self._black_screen = False
         self._connect_ok = False
+        self._network_error = False
+        self._network_error_revision = 0
         self._reward_archive: StampCodeArchive | None = None
         self._room_player_tracker: RoomPlayerTracker | None = None
 
@@ -6049,6 +6544,9 @@ class _PokopiaVisualState:
             self._able_access = detection.able_access
             self._black_screen = detection.black_screen
             self._connect_ok = detection.connect_ok
+            if detection.network_error and not self._network_error:
+                self._network_error_revision += 1
+            self._network_error = detection.network_error
 
     def cursor(self) -> str:
         with self._lock:
@@ -6069,6 +6567,11 @@ class _PokopiaVisualState:
     def connect_ok(self) -> bool:
         with self._lock:
             return self._connect_ok
+
+    def network_error_state(self) -> tuple[bool, int]:
+        """Return current visibility and a rising-edge revision counter."""
+        with self._lock:
+            return self._network_error, self._network_error_revision
 
     def code_panel(self) -> bool:
         with self._lock:
@@ -6145,6 +6648,7 @@ class _HeartbeatMacroContext(_MacroContext):
         self.macro_trigger_lock = threading.Lock()
         self.operation_lock_event = threading.Event()
         self.manual_screenshot_event = threading.Event()
+        self._reopen_screenshot_callback = None
         self._active_macro_key = 0
         self._automatic_restart_guard: _CursorGatedCodeTimer | None = None
         self._room_player_tracker: RoomPlayerTracker | None = None
@@ -6152,6 +6656,8 @@ class _HeartbeatMacroContext(_MacroContext):
         self._controller_activity_lock = threading.Lock()
         self._last_controller_input_monotonic = time.monotonic()
         self._idle_keepalive_in_progress = False
+        self._web_publisher: PokopiaWebStatePublisher | None = None
+        self._web_phase_key = "starting"
 
     def note_controller_input(self) -> None:
         """Reset the five-minute inactivity timer after a real button input."""
@@ -6209,6 +6715,46 @@ class _HeartbeatMacroContext(_MacroContext):
 
     def set_room_player_tracker(self, tracker: RoomPlayerTracker) -> None:
         self._room_player_tracker = tracker
+
+    def set_web_publisher(self, publisher: PokopiaWebStatePublisher) -> None:
+        self._web_publisher = publisher
+
+    def set_web_phase(
+        self,
+        key: str,
+        label: str,
+        *,
+        status_key: str | None = None,
+        status_label: str | None = None,
+        tone: str | None = None,
+    ) -> None:
+        self._web_phase_key = str(key)
+        publisher = self._web_publisher
+        if publisher is not None:
+            publisher.set_phase(
+                key,
+                label,
+                status_key=status_key,
+                status_label=status_label,
+                tone=tone,
+            )
+
+    def web_phase_key(self) -> str:
+        return self._web_phase_key
+
+    def set_web_announcement(self, text: str) -> None:
+        publisher = self._web_publisher
+        if publisher is not None:
+            publisher.set_announcement(text)
+
+    def set_reopen_screenshot_callback(self, callback) -> None:
+        self._reopen_screenshot_callback = callback
+
+    def record_reopen_screenshot(self, reason: str) -> None:
+        """Synchronously archive the last frame before reopen input begins."""
+        callback = self._reopen_screenshot_callback
+        if callback is not None:
+            callback(reason)
 
     def mark_room_disconnected(self) -> None:
         tracker = self._room_player_tracker
@@ -6366,6 +6912,8 @@ def _raise_if_code_timer_expired(code_recognizer: CodeRecognizer) -> None:
     if not code_recognizer.timer_expired():
         return
     reason = getattr(code_recognizer, "last_trigger_reason", "")
+    if reason == "network_connection_error":
+        raise _NetworkConnectionError
     if reason == "business_date_changed":
         raise _BusinessDateChanged
     if reason == "severe_timeout":
@@ -6498,11 +7046,70 @@ def _navigate_until_cursor_stamp(
             return False
 
 
+def _run_smart_macro_6_part_1(
+    context: _MacroContext,
+    *,
+    start_at_home: bool = False,
+) -> bool:
+    """Run Macro6's reopen/read-load segment without an external signature dependency.
+
+    A network-error reopen starts at HOME.  Every other reopen first performs
+    the normal escape inputs before reaching that same HOME/read-load path.
+    Keep this implementation local to the watchdog so deploying this file on
+    its own cannot accidentally call an older smart_macro_gamepad function.
+    """
+    if not start_at_home:
+        for direction in (
+            BIT_LSTICK_UP,
+            BIT_LSTICK_DOWN,
+            BIT_LSTICK_LEFT,
+            BIT_LSTICK_RIGHT,
+        ):
+            if not context.move_stick(direction, duration_ms=100):
+                return False
+        context.center_stick()
+        if not context.wait_ms(3000):
+            return False
+        for _ in range(6):
+            if not context.tap(BIT_B, hold_ms=50, gap_ms=500):
+                return False
+
+    steps = (
+        *((
+            (BIT_PLUS, 500),
+            (BIT_MINUS, 2000),
+            (BIT_DPAD_UP, 500),
+            (BIT_A, 5000),
+        ) if not start_at_home else ()),
+        (BIT_HOME, 500),
+        (BIT_DPAD_DOWN, 500),
+        (BIT_DPAD_LEFT, 500),
+        (BIT_DPAD_LEFT, 500),
+        (BIT_A, 1500),
+        *((BIT_DPAD_DOWN, 500) for _ in range(6)),
+        (BIT_A, 500),
+        *((BIT_DPAD_DOWN, 500) for _ in range(3)),
+        (BIT_A, 500),
+        (BIT_A, 3000),
+        (BIT_A, 500),
+        (BIT_A, 3500),
+        (BIT_A, 1000),
+        (BIT_A, 4000),
+        (BIT_DPAD_UP, 500),
+        (BIT_A, 0),
+    )
+    for bit_index, gap_ms in steps:
+        if not context.tap(bit_index, hold_ms=50, gap_ms=gap_ms):
+            return False
+    return True
+
+
 def _run_original_macro1_chain(
     context: _HeartbeatMacroContext,
     visual_state: _PokopiaVisualState,
 ) -> bool:
     """Run old macro1, then the current key-4 sequence after save success."""
+    context.record_reopen_screenshot("manual_key_3_read_load")
     completed = _run_smart_macro_6_part_1(context)
     if completed:
         _timestamped_log(
@@ -6531,6 +7138,13 @@ def _run_macro12_after_download(
     visual_state: _PokopiaVisualState,
 ) -> bool:
     """Key 1/2 post-download sequence gated by a complete black-screen cycle."""
+    context.set_web_phase(
+        "launching_game",
+        "存档已下载，正在返回游戏并等待黑屏",
+        status_key="reopening",
+        status_label="重开中",
+        tone="amber",
+    )
     _timestamped_log("POK_SAV_STATE=true：执行 HOME→A×4。")
     if not context.tap(BIT_HOME, hold_ms=50, gap_ms=500):
         return False
@@ -6539,15 +7153,18 @@ def _run_macro12_after_download(
             return False
 
     _timestamped_log("HOME→A×4 已完成，等待 BLACK SCREEN=ON。")
+    context.set_web_phase("waiting_black_on", "正在等待游戏进入黑屏")
     if not _wait_for_visual_state(context, visual_state.black_screen):
         return False
     _timestamped_log("检测到 BLACK SCREEN=ON，等待黑屏消失。")
+    context.set_web_phase("waiting_black_off", "已进入黑屏，正在等待游戏加载完成")
     if not _wait_for_visual_state(
         context,
         lambda: not visual_state.black_screen(),
     ):
         return False
     _timestamped_log("BLACK SCREEN 已变为OFF，等待3000ms。")
+    context.set_web_phase("post_load_delay", "黑屏已消失，等待画面稳定")
     if not context.wait_ms(3000):
         return False
     _timestamped_log(
@@ -6556,6 +7173,7 @@ def _run_macro12_after_download(
 
     if not context.tap(BIT_A, hold_ms=50, gap_ms=20000):
         return False
+    context.set_web_phase("opening_room", "正在进入联机入口并定位光标")
     if not _repeat_open_segment_until_cursor(context, visual_state):
         return False
     if not context.tap(BIT_DPAD_DOWN, hold_ms=50, gap_ms=500):
@@ -6570,9 +7188,49 @@ def _run_macro12_after_download(
         return False
     if not context.tap(BIT_A, hold_ms=50, gap_ms=1500):
         return False
-    if not context.tap(BIT_PLUS, hold_ms=50, gap_ms=20000):
+    if not context.tap(BIT_PLUS, hold_ms=50, gap_ms=0):
         return False
-    return context.tap(BIT_A, hold_ms=50, gap_ms=500)
+    return _wait_for_connect_ok_and_submit(context, visual_state)
+
+
+def _wait_for_connect_ok_and_submit(
+    context: _HeartbeatMacroContext,
+    visual_state: _PokopiaVisualState,
+) -> bool:
+    """Submit from CONNECT_OK and retry there until the CODE page appears."""
+    context.set_web_phase(
+        "waiting_connect_ok",
+        "已提交开门，正在等待连接完成",
+        status_key="waiting",
+        status_label="等待连接",
+        tone="amber",
+    )
+    _timestamped_log("已按+，持续等待 CONNECT_OK=ON 后按A进入CODE页面。")
+    if not _wait_for_visual_state(context, visual_state.connect_ok):
+        return False
+    _timestamped_log("检测到 CONNECT_OK=ON，按A并等待500ms。")
+    context.set_web_phase("submitting_connection", "连接已开始，正在进入CODE页面")
+    submitted_at = context.active_monotonic()
+    if not context.tap(BIT_A, hold_ms=50, gap_ms=500):
+        return False
+    while not visual_state.code_panel():
+        if (
+            context.active_monotonic() - submitted_at
+            >= CONNECT_OK_CODE_RETRY_SECONDS
+            and visual_state.connect_ok()
+        ):
+            _timestamped_log(
+                "按A后30秒仍未检测到CODE画面，且CONNECT_OK仍为ON："
+                "再次按A并重新开始30秒等待。"
+            )
+            submitted_at = context.active_monotonic()
+            if not context.tap(BIT_A, hold_ms=50, gap_ms=500):
+                return False
+        if not context.wait_ms(100):
+            return False
+    _timestamped_log("已检测到CODE画面，进入新CODE识别等待状态。")
+    context.set_web_phase("waiting_code_ocr", "CODE画面已出现，正在识别六位密语")
+    return True
 
 
 def _repeat_open_segment_until_cursor(
@@ -6612,11 +7270,26 @@ def _repeat_open_segment_until_cursor(
 def _run_macro12_download_chain(
     context: _HeartbeatMacroContext,
     visual_state: _PokopiaVisualState,
+    *,
+    start_at_home: bool = False,
 ) -> bool:
     """Run key 1/2's first part, then use the black-screen-gated ending."""
+    context.set_web_phase(
+        "reopening",
+        "网络异常后从HOME重开" if start_at_home else "正在结束上轮并执行完整读档重开",
+        status_key="reopening",
+        status_label="重开中",
+        tone="amber",
+    )
+    context.record_reopen_screenshot(
+        "network_connection_error" if start_at_home else "normal_reopen"
+    )
     context.arm_room_disconnect_on_next_home()
     try:
-        completed = _run_smart_macro_6_part_1(context)
+        completed = _run_smart_macro_6_part_1(
+            context,
+            start_at_home=start_at_home,
+        )
     finally:
         # An interruption before HOME must not freeze a later unrelated HOME.
         context.disarm_room_disconnect_on_next_home()
@@ -6624,6 +7297,7 @@ def _run_macro12_download_chain(
         _timestamped_log(
             "按键1/2前段已完成，开始等待 POK_SAV_STATE=true。"
         )
+        context.set_web_phase("waiting_save", "正在等待存档下载完成对勾")
     while completed and not visual_state.save_finished_event.is_set():
         completed = context.wait_ms(100)
     if not completed:
@@ -6659,17 +7333,20 @@ def _run_macro4_with_cursor_retry(
         return False
     if not context.tap(BIT_A, hold_ms=50, gap_ms=1500):
         return False
-    if not context.tap(BIT_PLUS, hold_ms=50, gap_ms=20000):
+    if not context.tap(BIT_PLUS, hold_ms=50, gap_ms=0):
         return False
-    return context.tap(BIT_A, hold_ms=50, gap_ms=500)
+    return _wait_for_connect_ok_and_submit(context, visual_state)
 
 
 def _run_stamp_check_until_no(
     context: _HeartbeatMacroContext,
     visual_state: _PokopiaVisualState,
     timer_guard,
+    *,
+    arm_timer_before_poll: bool = False,
 ) -> bool:
     """Navigate to STAMP and keep polling until STAMP:NO."""
+    context.set_web_phase("locating_stamp", "新轮次已建立，正在定位STAMP光标")
     _timestamped_log("等待 5000ms 后执行 B→上→右→下并定位 STAMP。")
     if not _wait_ms_with_code_timer(context, timer_guard, 5000):
         return False
@@ -6691,6 +7368,18 @@ def _run_stamp_check_until_no(
     ):
         return False
 
+    if arm_timer_before_poll:
+        timer_guard.arm()
+        _timestamped_log(
+            "已进入STAMP循环检测，15分钟/30分钟保护现在重新启用。"
+        )
+    context.set_web_phase(
+        "stamp_cycle",
+        "当前轮次开放中，持续检查梦幻章与玩家状态",
+        status_key="open",
+        status_label="开放中",
+        tone="green",
+    )
     return _poll_stamp_until_no(context, visual_state, timer_guard)
 
 
@@ -6700,6 +7389,13 @@ def _poll_stamp_until_no(
     timer_guard,
 ) -> bool:
     """At CURSOR:STAMP, poll continuously until the stamp page reports NO."""
+    context.set_web_phase(
+        "stamp_cycle",
+        "当前轮次开放中，持续检查梦幻章与玩家状态",
+        status_key="open",
+        status_label="开放中",
+        tone="green",
+    )
     next_a_at = time.monotonic() + STAMP_CHECK_INTERVAL_SECONDS
     stamp_check_due = False
     resume_detection_at: float | None = None
@@ -6807,7 +7503,7 @@ def _poll_stamp_until_no(
                     "保持到期状态，等待下一次确认STAMP后立即按A。"
                 )
                 continue
-            _timestamped_log("CURSOR:STAMP 周期达到10000ms，按A进入梦幻章页面。")
+            _timestamped_log("CURSOR:STAMP 周期达到7000ms，按A进入梦幻章页面。")
             if not context.tap(BIT_A, hold_ms=50, gap_ms=0):
                 return False
             stamp_check_due = False
@@ -6888,6 +7584,7 @@ def _run_dynamic_macro_start(
             visual_state.take_completed_tasks_for_new_code(),
             context.take_previous_round_player_entries(),
         )
+        context.set_web_announcement(announcement_text)
         _queue_code_input_to_chrome(
             entry_code,
             macro_key,
@@ -7012,6 +7709,7 @@ def _wait_for_new_code_and_count(
         visual_state.take_completed_tasks_for_new_code(),
         context.take_previous_round_player_entries(),
     )
+    context.set_web_announcement(announcement_text)
     _queue_code_input_to_chrome(
         code,
         macro_key,
@@ -7037,6 +7735,7 @@ def _run_automatic_macro1(
     )
     announcement_tracker = _RoundAnnouncementTracker()
     dynamic_start_pending = True
+    network_reopen_from_home = False
     while not context.stop_event.is_set():
         try:
             if dynamic_start_pending:
@@ -7057,18 +7756,23 @@ def _run_automatic_macro1(
                     timer_guard.disarm()
                     _timestamped_log(
                         "动态起点已检测到 STAMP:NO，"
-                        "关闭15分钟触发并返回宏最开头执行完整流程。"
+                        "关闭15分钟/30分钟触发并返回宏最开头执行完整流程。"
                     )
                     continue
 
             # From here until a new CODE is obtained, read/load/restart is
             # already in progress.  Cursor screens passed on that route must
-            # never inject a second 15-minute restart.
+            # never inject a second 15/30-minute restart.
             timer_guard.disarm()
             announcement_tracker.ensure_restart_started()
             code_revision_before_cycle = code_recognizer.revision()
-            if not _run_macro12_download_chain(context, visual_state):
+            if not _run_macro12_download_chain(
+                context,
+                visual_state,
+                start_at_home=network_reopen_from_home,
+            ):
                 return False
+            network_reopen_from_home = False
             code_recognizer.begin_ocr_round(1)
             _timestamped_log("旧宏组合已完成，继续等待 Pokopia CODE 变化。")
             if not _wait_for_new_code_and_count(
@@ -7083,28 +7787,53 @@ def _run_automatic_macro1(
                 return False
 
             _timestamped_log(
-                "检测到 CODE 变化，15分钟计时器已重置；"
-                "仅在有效CURSOR画面允许触发。"
+                "检测到 CODE 变化；重开收尾期间继续关闭15分钟/30分钟保护，"
+                "进入STAMP循环检测时再重新启用。"
             )
-            timer_guard.arm()
             if not _run_stamp_check_until_no(
                 context,
                 visual_state,
                 timer_guard,
+                arm_timer_before_poll=True,
             ):
                 return False
             announcement_tracker.mark_stamp_full()
             timer_guard.disarm()
             _timestamped_log(
-                "检测到 STAMP:NO，关闭15分钟触发并返回自动宏开头"
+                "检测到 STAMP:NO，关闭15分钟/30分钟触发并返回自动宏开头"
                 "执行完整流程。"
             )
+        except _NetworkConnectionError:
+            announcement_tracker.mark_network_connection_error(
+                code_recognizer.timer_elapsed_seconds()
+            )
+            timer_guard.disarm()
+            network_reopen_from_home = True
+            _timestamped_log(
+                "检测到Switch连接错误弹窗：结束本轮并记录开放时长；"
+                "网络异常重开跳过HOME之前的全部动作，直接从HOME开始完整读档/重开。"
+            )
+            context.set_web_phase(
+                "network_error_reopen",
+                "检测到网络波动，正在关闭本轮并重新开放",
+                status_key="error",
+                status_label="网络异常重开",
+                tone="red",
+            )
+            continue
         except _BusinessDateChanged:
             announcement_tracker.mark_business_date_changed()
             timer_guard.disarm()
             _timestamped_log(
                 "北京时间已到05:00，业务日期发生变更；"
                 "不判断CURSOR，立即返回自动宏开头执行完整读档/重开。"
+            )
+            context.set_web_phase(
+                "date_change_reopen",
+                "业务日期变更，正在重新开放",
+                status_key="reopening",
+                status_label="日期切换重开",
+                tone="amber",
             )
             continue
         except _SevereCodeTimerExpired:
@@ -7113,6 +7842,13 @@ def _run_automatic_macro1(
             _timestamped_log(
                 "CODE更新已严重超时30分钟；不判断CURSOR，"
                 "立即返回自动宏开头执行完整读档/重开。"
+            )
+            context.set_web_phase(
+                "severe_timeout_reopen",
+                "严重超时，正在重新开放并等待检查",
+                status_key="error",
+                status_label="严重超时重开",
+                tone="red",
             )
             continue
         except _CodeTimerExpired:
@@ -7124,6 +7860,13 @@ def _run_automatic_macro1(
                 f"CURSOR:{trigger_cursor}；关闭再次触发并返回自动宏开头"
                 "执行完整流程。"
             )
+            context.set_web_phase(
+                "timeout_reopen",
+                "本轮已到15分钟，正在自动重新开放",
+                status_key="reopening",
+                status_label="超时重开",
+                tone="amber",
+            )
             continue
         except _CodeRecognitionTimedOut:
             timer_guard.disarm()
@@ -7131,6 +7874,13 @@ def _run_automatic_macro1(
             _timestamped_log(
                 "绿色CODE面板持续3分钟仍未识别到有效新CODE；"
                 "不计数、不发送，立即返回宏最开头重新执行完整读档/重开。"
+            )
+            context.set_web_phase(
+                "code_ocr_timeout_reopen",
+                "CODE识别超时，正在重新开放",
+                status_key="error",
+                status_label="识别异常重开",
+                tone="red",
             )
             continue
     return False
@@ -7143,30 +7893,50 @@ def _run_dynamic_macro2_once(
     run_counter: Macro6RunCounter,
 ) -> bool:
     """Resume dynamically, run former key 2, then stop at the new CODE."""
-    visual_state.reset_completed_tasks()
     announcement_tracker = _RoundAnnouncementTracker()
-    handled, completed = _run_dynamic_macro_start(
-        context,
-        visual_state,
-        code_recognizer,
-        run_counter,
-        announcement_tracker,
-        2,
-        _NEVER_EXPIRE_CODE_TIMER,
-    )
-    if handled:
-        if not completed:
-            return False
-        announcement_tracker.mark_stamp_full()
-        _timestamped_log(
-            "按键2动态入口的STAMP检查已完成，开始执行原按键2内容。"
+    network_guard = _NetworkConnectionErrorGuard(visual_state)
+    network_reopen_from_home = False
+    context.set_automatic_restart_guard(network_guard)
+    try:
+        _raise_if_code_timer_expired(network_guard)
+        handled, completed = _run_dynamic_macro_start(
+            context,
+            visual_state,
+            code_recognizer,
+            run_counter,
+            announcement_tracker,
+            2,
+            network_guard,
         )
+        if handled:
+            if not completed:
+                return False
+            announcement_tracker.mark_stamp_full()
+            _timestamped_log(
+                "按键2动态入口的STAMP检查已完成，开始执行原按键2内容。"
+            )
+    except _NetworkConnectionError:
+        announcement_tracker.mark_network_connection_error(
+            code_recognizer.timer_elapsed_seconds()
+        )
+        network_reopen_from_home = True
+        _timestamped_log(
+            "按键2检测到Switch连接错误弹窗：结束本轮并记录开放时长；"
+            "跳过HOME之前的全部动作，直接从HOME读档/重开；"
+            "取得新CODE后停止。"
+        )
+    network_guard.disarm()
 
     while not context.stop_event.is_set():
         baseline_revision = code_recognizer.revision()
         announcement_tracker.ensure_restart_started()
-        if not _run_macro12_download_chain(context, visual_state):
+        if not _run_macro12_download_chain(
+            context,
+            visual_state,
+            start_at_home=network_reopen_from_home,
+        ):
             return False
+        network_reopen_from_home = False
         code_recognizer.begin_ocr_round(2)
         _timestamped_log("按键2原内容已完成，等待执行后新CODE。")
         try:
@@ -7208,6 +7978,13 @@ def _run_macro6_watchdog_loop(
         "2=动态起点单轮宏→停在新CODE，"
         "3=原宏1，4=原宏2。"
     )
+    context.set_web_phase(
+        "standby",
+        "watchdog已就绪，等待宏按键",
+        status_key="standby",
+        status_label="待机",
+        tone="gray",
+    )
     while not context.stop_event.is_set():
         context.heartbeat.beat()
         selected_part = 0
@@ -7230,6 +8007,13 @@ def _run_macro6_watchdog_loop(
 
         _timestamped_log(
             f"smart macro6 watchdog 开始执行按键 {selected_part} 宏。"
+        )
+        context.set_web_phase(
+            "macro_started",
+            f"按键{selected_part}宏已启动，正在判断当前入口",
+            status_key="running",
+            status_label="流程执行中",
+            tone="amber",
         )
         completed = False
         interrupted = False
@@ -7279,15 +8063,43 @@ def _run_macro6_watchdog_loop(
                 f"smart macro6 watchdog 按键 {selected_part} 宏已被 0 强制中断，"
                 "所有待处理宏指令已丢弃，返回待机。"
             )
+            context.set_web_phase(
+                "interrupted",
+                f"按键{selected_part}宏已被手动中断",
+                status_key="standby",
+                status_label="已中断",
+                tone="gray",
+            )
             continue
         if not completed:
             return
         if selected_part == 2:
             _timestamped_log("按键2已停在执行后新CODE，返回手动待机。")
+            context.set_web_phase(
+                "single_round_ready",
+                "单次宏已取得新CODE，等待下一次手动操作",
+                status_key="open",
+                status_label="开放中",
+                tone="green",
+            )
         elif selected_part == 3:
             _timestamped_log("按键3原宏1执行完成，返回待机。")
+            context.set_web_phase(
+                "standby",
+                "读档宏已完成，等待操作",
+                status_key="standby",
+                status_label="待机",
+                tone="gray",
+            )
         else:
             _timestamped_log("按键4原宏2执行完成，返回待机。")
+            context.set_web_phase(
+                "standby",
+                "开门宏已完成，等待操作",
+                status_key="standby",
+                status_label="待机",
+                tone="gray",
+            )
 
 
 def _handle_watchdog_control_key(
@@ -7473,6 +8285,7 @@ class PokopiaDetection:
     reward: bool
     reward_lines: int
     stamp: str
+    network_error: bool
 
 
 class StampCodeArchive:
@@ -7536,6 +8349,7 @@ class StampCodeArchive:
                         "REWARD": detection.reward,
                         "REWARD_LINES": detection.reward_lines,
                         "STAMP": detection.stamp,
+                        "NETWORK_ERROR": detection.network_error,
                     },
                 }
                 with record_path.open("a", encoding="utf-8") as output:
@@ -7609,6 +8423,7 @@ class StampCodeArchive:
                             "REWARD": detection.reward,
                             "REWARD_LINES": detection.reward_lines,
                             "STAMP": detection.stamp,
+                            "NETWORK_ERROR": detection.network_error,
                         }
                         if detection is not None
                         else None
@@ -7661,6 +8476,7 @@ class StampCodeArchive:
                         "REWARD": detection.reward,
                         "REWARD_LINES": detection.reward_lines,
                         "STAMP": detection.stamp,
+                        "NETWORK_ERROR": detection.network_error,
                     },
                 }
                 with record_path.open("a", encoding="utf-8") as output:
@@ -7670,6 +8486,55 @@ class StampCodeArchive:
                 )
             except Exception as exc:
                 _timestamped_log(f"watchdog 原始画面截图保存失败：{exc}")
+
+    def record_round_end_screenshot(
+        self,
+        frame: np.ndarray,
+        code: str,
+        run_count: RunCounterSnapshot,
+        reason: str,
+        macro_key: int,
+    ) -> None:
+        """Archive the unmodified frame synchronously before a reopen starts."""
+        now_utc = datetime.now(timezone.utc)
+        stamp_date = self._stamp_date(now_utc)
+        folder_name = f"STAMP_{stamp_date}"
+        folder = self.root / folder_name
+        safe_code = re.sub(r"[^0-9A-Za-z_-]+", "_", code.strip()) or "EMPTY"
+        filename = (
+            "SCREENSHOT_"
+            + now_utc.strftime("%Y%m%dT%H%M%S_%fZ")
+            + f"_{safe_code}_结束.png"
+        )
+        screenshot_path = folder / filename
+        record_path = folder / f"{folder_name}.jsonl"
+        with self._lock:
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                screenshot_saved = self._save_png(screenshot_path, frame)
+                record = {
+                    "recorded_at_utc": now_utc.isoformat(
+                        timespec="milliseconds"
+                    ).replace("+00:00", "Z"),
+                    "stamp_operational_date": stamp_date,
+                    "status": "round_end_before_reopen",
+                    "round_today": run_count.daily_runs,
+                    "round_total": run_count.total_runs,
+                    "code": code,
+                    "reason": reason,
+                    "macro_key": int(macro_key),
+                    "screenshot": filename if screenshot_saved else "未保存",
+                }
+                with record_path.open("a", encoding="utf-8") as output:
+                    output.write(json.dumps(record, ensure_ascii=False) + "\n")
+                _timestamped_log(
+                    "重开前原始截图已归档："
+                    f"本日第{run_count.daily_runs}轮、总第"
+                    f"{run_count.total_runs}轮、CODE={code or '<空>'}、"
+                    f"原因={reason}；{folder_name}/{record['screenshot']}"
+                )
+            except Exception as exc:
+                _timestamped_log(f"重开前原始截图保存失败：{exc}")
 
     def record_player_notification_failure(
         self,
@@ -7714,6 +8579,60 @@ class StampCodeArchive:
                 )
             except Exception as exc:
                 _timestamped_log(f"玩家通知失败截图保存失败：{exc}")
+
+    def record_player_name_crop(
+        self,
+        player_name: str,
+        name_crop: np.ndarray,
+        captured_at_utc: datetime,
+        notification_status: str,
+    ) -> None:
+        """Save the repaired OCR input and append its result to an index."""
+        if name_crop is None or name_crop.size == 0:
+            return
+        capture_time = captured_at_utc
+        if capture_time.tzinfo is None:
+            capture_time = capture_time.replace(tzinfo=timezone.utc)
+        capture_time = capture_time.astimezone(timezone.utc)
+        # This is filename safety only. Keep the recognized name itself
+        # unchanged, including punctuation that is legal in Windows paths.
+        safe_name = re.sub(
+            r'[<>:"/\\|?*\x00-\x1f]+',
+            "_",
+            player_name,
+        ).strip(" .")
+        safe_name = (safe_name or "EMPTY")[:80]
+        folder = self.root / "Name"
+        base_name = (
+            capture_time.strftime("%Y%m%dT%H%M%S_%fZ")
+            + f"_{safe_name}"
+        )
+        with self._lock:
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                screenshot_path = folder / f"{base_name}.png"
+                suffix = 2
+                while screenshot_path.exists():
+                    screenshot_path = folder / f"{base_name}_{suffix}.png"
+                    suffix += 1
+                if self._save_png(screenshot_path, name_crop):
+                    record_time = capture_time.isoformat(
+                        timespec="milliseconds"
+                    ).replace("+00:00", "Z")
+                    record_path = folder / "姓名识别记录.txt"
+                    with record_path.open("a", encoding="utf-8") as output:
+                        output.write(
+                            f"{record_time}\t{screenshot_path.name}\t"
+                            f"识别名={player_name}\t状态={notification_status}\n"
+                        )
+                    _timestamped_log(
+                        "玩家姓名右边缘修复裁剪已归档："
+                        f"Name/{screenshot_path.name}"
+                    )
+                else:
+                    _timestamped_log("玩家姓名原始裁剪编码失败。")
+            except Exception as exc:
+                _timestamped_log(f"玩家姓名原始裁剪保存失败：{exc}")
 
     def record_reward_tasks(
         self,
@@ -7959,6 +8878,24 @@ class _PlayerVisit:
             "player_name": self.player_name,
             "visit_index_for_player": self.visit_index_for_player,
             "result": "entered" if successful else "entry_failed",
+            "failure_reason": (
+                None
+                if successful
+                else (
+                    "room_closed_before_arrival"
+                    if self.ended_by_freeze
+                    else "left_before_arrival"
+                )
+            ),
+            "failure_reason_text": (
+                None
+                if successful
+                else (
+                    "房间关闭时仍未抵达"
+                    if self.ended_by_freeze
+                    else "到达前返回"
+                )
+            ),
             "incoming": local_time(self.incoming_at_utc),
             "arrived": local_time(self.arrived_at_utc),
             "ended": local_time(end),
@@ -7968,7 +8905,14 @@ class _PlayerVisit:
             "available_reward_tasks": min(3, self.available_rewards),
             "completed_reward_tasks": min(3, self.completed_rewards),
             "description": (
-                f"{self.player_name}，加载所用时长{loading_seconds}秒，进入失败"
+                f"{self.player_name}，加载所用时长{loading_seconds}秒，"
+                "进入失败（"
+                + (
+                    "房间关闭时仍未抵达"
+                    if self.ended_by_freeze
+                    else "到达前返回"
+                )
+                + "）"
                 if not successful
                 else (
                     f"{self.player_name}，本次进入时间"
@@ -8145,6 +9089,7 @@ class RoomPlayerTracker:
             visit_index_for_player = 0
             player_entered = False
             player_entry_failed = False
+            arrival_task_increment = 0
             if status == "incoming":
                 room_status = "路上"
                 changed = previous_status != room_status
@@ -8184,6 +9129,11 @@ class RoomPlayerTracker:
                     visit.arrived_at_utc = now_utc
                     self._round_player_entries += 1
                     player_entered = True
+                    arrival_task_increment = max(
+                        0,
+                        visit.available_rewards - visit.completed_rewards,
+                    )
+                    visit.completed_rewards = visit.available_rewards
                 visit_index_for_player = visit.visit_index_for_player
             else:
                 room_status = ""
@@ -8220,14 +9170,25 @@ class RoomPlayerTracker:
             processing_delay_ms=processing_delay_ms,
         )
         if player_entered:
-            count = self._run_counter.record_player_entered()
+            count = self._run_counter.record_player_entered(canonical_name)
+            if arrival_task_increment > 0:
+                self._run_counter.record_player_completed_tasks(
+                    {canonical_name: arrival_task_increment}
+                )
+                _timestamped_log(
+                    f"玩家{canonical_name}确认已抵达："
+                    f"补计加载期间参与完成任务{arrival_task_increment}次。"
+                )
             _timestamped_log(
                 f"玩家成功进入累计：本轮{self.current_round_entries()}人，"
                 f"本日{count.daily_player_entries}人，"
                 f"总计{count.total_player_entries}人。"
             )
         if player_entry_failed:
-            count = self._run_counter.record_player_entry_failures()
+            count = self._run_counter.record_player_entry_failures(
+                player_names=(canonical_name,),
+                reason="left_before_arrival",
+            )
             _timestamped_log(
                 f"玩家进入失败累计：本轮"
                 f"{self.current_round_entry_failures()}人，"
@@ -8244,16 +9205,29 @@ class RoomPlayerTracker:
         with self._lock:
             if self._showing_disconnected_room:
                 return
+            completed_task_increments: dict[str, int] = {}
             for visit in self._active_visits.values():
                 visit.available_rewards = min(
                     3,
                     visit.available_rewards + count,
                 )
                 if visit.arrived_at_utc is not None:
+                    completed_before = visit.completed_rewards
                     visit.completed_rewards = min(
                         3,
                         visit.completed_rewards + count,
                     )
+                    completed_increment = (
+                        visit.completed_rewards - completed_before
+                    )
+                    if completed_increment > 0:
+                        completed_task_increments[visit.player_name] = (
+                            completed_task_increments.get(
+                                visit.player_name,
+                                0,
+                            )
+                            + completed_increment
+                        )
             player_progress = tuple(
                 {
                     "player_name": visit.player_name,
@@ -8266,6 +9240,9 @@ class RoomPlayerTracker:
                 }
                 for visit in self._active_visits.values()
             )
+        self._run_counter.record_player_completed_tasks(
+            completed_task_increments
+        )
         self._archive.record_player_reward(
             reward_lines_added=count,
             players=player_progress,
@@ -8280,12 +9257,14 @@ class RoomPlayerTracker:
             self._disconnected_players = tuple(self._players.items())
             self._showing_disconnected_room = True
             frozen_failures = 0
+            frozen_failure_names: list[str] = []
             for visit in self._active_visits.values():
                 visit.ended_at_utc = frozen_at_utc
                 visit.ended_by_freeze = True
                 self._round_visits.append(visit)
                 if visit.arrived_at_utc is None:
                     frozen_failures += 1
+                    frozen_failure_names.append(visit.player_name)
             self._round_player_entry_failures += frozen_failures
             self._active_visits.clear()
             visits = tuple(
@@ -8296,7 +9275,11 @@ class RoomPlayerTracker:
             round_player_entry_failures = self._round_player_entry_failures
             self._previous_round_player_entries = round_player_entries
         if frozen_failures:
-            self._run_counter.record_player_entry_failures(frozen_failures)
+            self._run_counter.record_player_entry_failures(
+                frozen_failures,
+                player_names=tuple(frozen_failure_names),
+                reason="room_closed_before_arrival",
+            )
         reopen_index = self._archive.record_room_reopen_summary(
             visits,
             frozen_at_utc,
@@ -8431,6 +9414,23 @@ class PokopiaDetector:
                 "Pokopia watchdog 内嵌特征损坏："
                 + "；".join(invalid or [f"数量={len(self.templates)}"])
             )
+        packed_network_error = np.frombuffer(
+            zlib.decompress(
+                base64.b64decode(
+                    NETWORK_ERROR_CLOSE_MASK_ZLIB_BASE64
+                )
+            ),
+            dtype=np.uint8,
+        )
+        network_error_count = int(
+            np.prod(NETWORK_ERROR_CLOSE_TEMPLATE_SHAPE)
+        )
+        self._network_error_close_mask = (
+            np.unpackbits(packed_network_error)[:network_error_count]
+            .reshape(NETWORK_ERROR_CLOSE_TEMPLATE_SHAPE)
+            .astype(np.float32)
+        )
+        self._network_error_streak = 0
 
     def _match(
         self,
@@ -8573,6 +9573,43 @@ class PokopiaDetector:
             previous_row = current_row
         return min(3, line_count)
 
+    def _detect_network_error(self, frame: np.ndarray) -> bool:
+        """Match the fixed neutral-white “关闭” button glyphs."""
+        crop = _fractional_crop(frame, NETWORK_ERROR_CLOSE_ROI)
+        spread = crop.max(axis=2).astype(np.int16) - crop.min(
+            axis=2
+        ).astype(np.int16)
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        neutral_white = ((gray >= 175) & (spread <= 38)).astype(np.uint8)
+        normalized = cv2.resize(
+            neutral_white * 255,
+            (
+                NETWORK_ERROR_CLOSE_TEMPLATE_SHAPE[1],
+                NETWORK_ERROR_CLOSE_TEMPLATE_SHAPE[0],
+            ),
+            interpolation=cv2.INTER_AREA,
+        ).astype(np.float32) / 255.0
+        denominator = float(
+            normalized.sum() + self._network_error_close_mask.sum()
+        )
+        dice = (
+            2.0
+            * float(
+                np.minimum(
+                    normalized,
+                    self._network_error_close_mask,
+                ).sum()
+            )
+            / denominator
+            if denominator > 0.0
+            else 0.0
+        )
+        if dice >= NETWORK_ERROR_CLOSE_MIN_DICE:
+            self._network_error_streak += 1
+        else:
+            self._network_error_streak = 0
+        return self._network_error_streak >= NETWORK_ERROR_CONFIRM_FRAMES
+
     def detect(self, frame: np.ndarray) -> PokopiaDetection:
         if frame is None or frame.size == 0 or frame.ndim != 3:
             return PokopiaDetection(
@@ -8585,6 +9622,7 @@ class PokopiaDetector:
                 False,
                 0,
                 "INVALID",
+                False,
             )
         if frame.shape[:2] != (CAPTURE_HEIGHT, CAPTURE_WIDTH):
             frame = cv2.resize(
@@ -8609,6 +9647,7 @@ class PokopiaDetector:
                 self._detect_reward_line_count(frame) if reward else 0
             ),
             stamp=self._detect_stamp(frame),
+            network_error=self._detect_network_error(frame),
         )
 
 
@@ -9055,6 +10094,109 @@ _PLAYER_RAPIDOCR_LOCK = threading.Lock()
 _PLAYER_RAPIDOCR_ENGINE = None
 _PLAYER_RAPIDOCR_INITIALIZED = False
 _PLAYER_RAPIDOCR_ERROR_LOGGED = False
+_PLAYER_NAME_GLYPH_ATLAS: np.ndarray | None = None
+
+
+def _embedded_player_name_glyph_atlas() -> np.ndarray:
+    """Decode the compact per-character four-bit orange glyph atlas."""
+    global _PLAYER_NAME_GLYPH_ATLAS
+    if _PLAYER_NAME_GLYPH_ATLAS is not None:
+        return _PLAYER_NAME_GLYPH_ATLAS
+    packed = np.frombuffer(
+        zlib.decompress(
+            base64.b64decode(PLAYER_NAME_GLYPH_ATLAS_ZLIB_BASE64)
+        ),
+        dtype=np.uint8,
+    )
+    value_count = (
+        len(PLAYER_NAME_GLYPH_LABELS)
+        * PLAYER_NAME_GLYPH_SHAPE[0]
+        * PLAYER_NAME_GLYPH_SHAPE[1]
+    )
+    quantized = np.empty(value_count, dtype=np.uint8)
+    quantized[0::2] = packed >> 4
+    quantized[1::2] = packed & 0x0F
+    _PLAYER_NAME_GLYPH_ATLAS = (
+        quantized.reshape(
+            len(PLAYER_NAME_GLYPH_LABELS),
+            *PLAYER_NAME_GLYPH_SHAPE,
+        ).astype(np.float32)
+        / 15.0
+    )
+    return _PLAYER_NAME_GLYPH_ATLAS
+
+
+def _recognize_embedded_player_name_glyphs(
+    player_name_crop: np.ndarray,
+) -> tuple[str, float, str]:
+    """Recognize confident full-width glyph slots before invoking OCR."""
+    if player_name_crop.size == 0 or player_name_crop.ndim != 3:
+        return "", 0.0, ""
+    blue, green, red = cv2.split(player_name_crop[:, :, :3])
+    orange_mask = (
+        (red > 180)
+        & (green > 70)
+        & (green < 205)
+        & (blue < 100)
+        & (red.astype(np.int16) > green.astype(np.int16) + 35)
+    ).astype(np.uint8)
+    rows, columns = np.where(orange_mask)
+    if rows.size < 24:
+        return "", 0.0, ""
+    glyph_line = orange_mask[
+        rows.min() : rows.max() + 1,
+        columns.min() : columns.max() + 1,
+    ]
+    height, width = glyph_line.shape
+    if height <= 0:
+        return "", 0.0, ""
+    aspect = width / height
+    slot_count = int(round(aspect / 1.08))
+    if not 1 <= slot_count <= 12:
+        return "", 0.0, ""
+    slot_aspect = aspect / slot_count
+    if abs(slot_aspect - 1.08) > 0.20:
+        return "", 0.0, ""
+
+    atlas = _embedded_player_name_glyph_atlas()
+    edges = np.linspace(0, width, slot_count + 1).round().astype(int)
+    recognized: list[str] = []
+    errors: list[float] = []
+    margins: list[float] = []
+    for index in range(slot_count):
+        slot = glyph_line[:, edges[index] : edges[index + 1]]
+        if slot.size == 0:
+            return "", 0.0, ""
+        normalized = cv2.resize(
+            slot * 255,
+            (PLAYER_NAME_GLYPH_SHAPE[1], PLAYER_NAME_GLYPH_SHAPE[0]),
+            interpolation=cv2.INTER_AREA,
+        ).astype(np.float32) / 255.0
+        scores = np.mean(
+            np.abs(atlas - normalized[None, :, :]),
+            axis=(1, 2),
+        )
+        ranking = np.argsort(scores)
+        best_index = int(ranking[0])
+        best_error = float(scores[best_index])
+        second_error = float(scores[int(ranking[1])])
+        recognized.append(PLAYER_NAME_GLYPH_LABELS[best_index])
+        errors.append(best_error)
+        margins.append(second_error - best_error)
+
+    maximum_error = max(errors)
+    minimum_margin = min(margins)
+    if maximum_error > 0.16 or minimum_margin < 0.04:
+        return "", 0.0, (
+            f"glyph-rejected(max_error={maximum_error:.3f}, "
+            f"min_margin={minimum_margin:.3f}, slots={slot_count})"
+        )
+    text_value = "".join(recognized)
+    confidence = max(0.0, min(0.99, 1.0 - maximum_error * 2.5))
+    return text_value, confidence, (
+        f"glyph-atlas={text_value}(max_error={maximum_error:.3f}, "
+        f"min_margin={minimum_margin:.3f}, slots={slot_count})"
+    )
 
 
 def _player_name_ocr_variants(
@@ -9072,18 +10214,36 @@ def _player_name_ocr_variants(
         fy=scale,
         interpolation=cv2.INTER_CUBIC,
     )
-    # The geometric crop already contains a small source-pixel margin.  Do
-    # not add a large white border: recognition models can otherwise collapse
-    # a single glyph (notably Q) to a blank sequence.
-    original = enlarged
-
     # Preserve antialiased edges: orange ink has red clearly above blue/green,
     # while the pale banner background has almost no such channel difference.
     blue, green, red = cv2.split(enlarged.astype(np.float32))
     ink_strength = np.maximum(red - blue, red - green)
+    strong_orange = (
+        (red > 180)
+        & (green > 70)
+        & (green < 205)
+        & (blue < 100)
+        & (red > green + 35)
+    )
+    # Only pixels connected to genuine orange ink may reach OCR. This removes
+    # the dark first stroke of the following status text and colored HUD lines
+    # that sometimes remain inside the geometrically cropped right margin.
+    orange_neighborhood = cv2.dilate(
+        strong_orange.astype(np.uint8),
+        np.ones((3, 3), dtype=np.uint8),
+        iterations=1,
+    ).astype(bool)
+    orange_support = (ink_strength > 8.0) & orange_neighborhood
+    orange_original = np.full_like(enlarged, 255)
+    orange_original[orange_support] = enlarged[orange_support]
+
     positive = ink_strength[ink_strength > 8.0]
     reference = float(np.percentile(positive, 92)) if positive.size else 1.0
-    soft_ink = np.clip(ink_strength / max(24.0, reference), 0.0, 1.0)
+    soft_ink = np.clip(
+        ink_strength / max(24.0, reference),
+        0.0,
+        1.0,
+    ) * orange_neighborhood
     soft_mask = (255.0 * (1.0 - soft_ink)).astype(np.uint8)
     _, binary_mask = cv2.threshold(
         soft_mask,
@@ -9094,7 +10254,12 @@ def _player_name_ocr_variants(
     soft_bgr = cv2.cvtColor(soft_mask, cv2.COLOR_GRAY2BGR)
     binary_bgr = cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2BGR)
     return (
-        ("original", original),
+        # Restore the original antialiased crop that gave the early player
+        # OCR its best Chinese accuracy.  Geometry below is measured from
+        # orange pixels only, so a dark status stroke cannot make a longer
+        # OCR string valid.
+        ("raw-original", enlarged),
+        ("orange-original", orange_original),
         ("orange-soft", soft_bgr),
         ("orange-binary", binary_bgr),
     )
@@ -9151,20 +10316,12 @@ def _single_latin_player_name_fallback(
     return ""
 
 
-def _player_name_has_multiple_visible_glyphs(
+def _player_name_orange_aspect(
     player_name_image: np.ndarray,
-) -> bool:
-    """Return true when orange ink cannot plausibly be one visible glyph.
-
-    This is deliberately geometry-only: player-name characters are not
-    assumed to be equal width.  Its sole purpose is to reject a one-character
-    OCR result when the untouched crop is nearly twice as wide as its glyph
-    height (for example, the complete two-character image “来须” being read
-    as only “来”).  The conservative threshold keeps genuinely wide single
-    glyphs and the dedicated uppercase-L fallback valid.
-    """
+) -> float | None:
+    """Measure only the visible orange name width divided by glyph height."""
     if player_name_image.size == 0 or player_name_image.ndim != 3:
-        return False
+        return None
     blue, green, red = cv2.split(player_name_image[:, :, :3])
     red_i = red.astype(np.int16)
     green_i = green.astype(np.int16)
@@ -9177,20 +10334,62 @@ def _player_name_has_multiple_visible_glyphs(
     )
     rows, columns = np.where(orange_mask)
     if rows.size < 24:
-        return False
+        return None
     ink_width = int(columns.max() - columns.min() + 1)
     ink_height = int(rows.max() - rows.min() + 1)
-    return ink_height > 0 and ink_width / ink_height >= 1.45
+    return ink_width / ink_height if ink_height > 0 else None
+
+
+def _player_name_character_advance(character: str) -> float:
+    """Estimate Nintendo UI advance width without assuming equal glyphs."""
+    if character == "\u200d" or unicodedata.combining(character):
+        return 0.0
+    if 0xFE00 <= ord(character) <= 0xFE0F:
+        return 0.0
+    east_asian_width = unicodedata.east_asian_width(character)
+    if east_asian_width in {"W", "F"}:
+        return 1.0
+    if character in "ilI1|![](){}'`.,:;_":
+        return 0.32
+    if character in "MWmw@%&":
+        return 0.85
+    if character.isdigit():
+        return 0.58
+    if "A" <= character <= "Z":
+        return 0.62
+    if "a" <= character <= "z":
+        return 0.52
+    if east_asian_width == "A":
+        return 0.75
+    return 0.58
+
+
+def _player_name_geometry_error(
+    text_value: str,
+    orange_aspect: float | None,
+) -> float:
+    """Return relative disagreement between OCR text and orange ink width."""
+    if not text_value or orange_aspect is None or orange_aspect <= 0.0:
+        return 1.0
+    advance = sum(
+        _player_name_character_advance(character)
+        for character in text_value
+    )
+    if advance <= 0.0:
+        return 1.0
+    predicted_aspect = advance * 1.08
+    return abs(predicted_aspect - orange_aspect) / max(
+        predicted_aspect,
+        orange_aspect,
+    )
 
 
 def _player_name_candidate_is_complete(
     text_value: str,
-    multiple_visible_glyphs: bool,
+    orange_aspect: float | None,
 ) -> bool:
-    """Prevent a visibly multi-glyph name from collapsing to one codepoint."""
-    if not text_value:
-        return False
-    return not (multiple_visible_glyphs and len(text_value) == 1)
+    """Accept only text whose character advances fit the orange name width."""
+    return _player_name_geometry_error(text_value, orange_aspect) <= 0.195
 
 
 def _player_name_character_count(text_value: str) -> int:
@@ -9201,6 +10400,20 @@ def _player_name_character_count(text_value: str) -> int:
         if character != "\u200d"
         and not unicodedata.combining(character)
         and not 0xFE00 <= ord(character) <= 0xFE0F
+    )
+
+
+def _player_name_group_rank(
+    group: list[tuple[str, float, str]],
+    orange_aspect: float | None,
+) -> tuple[int, float, float]:
+    """Restore source consensus first; width and confidence break ties."""
+    source_count = len({item[2] for item in group})
+    maximum_confidence = max(item[1] for item in group)
+    return (
+        source_count,
+        -_player_name_geometry_error(group[0][0], orange_aspect),
+        maximum_confidence,
     )
 
 
@@ -9315,13 +10528,21 @@ def _rapidocr_player_candidates(
 def _recognize_player_name_variants(
     variants: tuple[tuple[str, np.ndarray], ...],
 ) -> tuple[str, float, str]:
-    """Use generic OCR first, then Windows OCR; combine variant consensus."""
+    """Combine OCR evidence only after checking the orange name geometry."""
     observations: list[tuple[str, float, str]] = []
     rejected_observations: list[tuple[str, float, str]] = []
-    multiple_visible_glyphs = bool(
-        variants
-        and _player_name_has_multiple_visible_glyphs(variants[0][1])
+    orange_aspect = (
+        _player_name_orange_aspect(variants[0][1])
+        if variants
+        else None
     )
+
+    def source_consensus() -> bool:
+        groups: dict[str, set[str]] = {}
+        for text_value, _, source in observations:
+            groups.setdefault(text_value.casefold(), set()).add(source)
+        return any(len(sources) >= 2 for sources in groups.values())
+
     for variant_name, image in variants:
         for text_value, confidence in _rapidocr_player_candidates(image):
             observation = (
@@ -9331,15 +10552,16 @@ def _recognize_player_name_variants(
             )
             if _player_name_candidate_is_complete(
                 text_value,
-                multiple_visible_glyphs,
+                orange_aspect,
             ):
                 observations.append(observation)
             else:
                 rejected_observations.append(observation)
-        # Always run all three RapidOCR variants.  Two variants can agree on
-        # a truncated suffix such as “彩彩” while the remaining orange-mask
-        # variant has already recovered the full “八彩彩”.  Stopping on early
-        # consensus would permanently discard the longest available name.
+        # Restore the early stable behavior: two geometry-compatible variants
+        # are enough. A shorter “彩彩” cannot stop “八彩彩” because its total
+        # character advance does not fit the measured three-glyph width.
+        if source_consensus():
+            break
 
     generic_groups: dict[str, list[tuple[str, float, str]]] = {}
     for observation in observations:
@@ -9352,9 +10574,9 @@ def _recognize_player_name_variants(
         for group in generic_groups.values()
     )
 
-    # Windows OCR is the low-confidence fallback.  Running both languages
-    # avoids losing Latin, Chinese, or mixed player names when one language
-    # returns junk.
+    # Windows OCR is the low-confidence fallback. Stop as soon as two
+    # geometry-compatible sources agree instead of always starting every
+    # PowerShell/language/variant combination.
     if not generic_is_reliable and sys.platform == "win32":
         with tempfile.TemporaryDirectory(
             prefix="macro6-player-ocr-"
@@ -9379,44 +10601,18 @@ def _recognize_player_name_variants(
                     )
                     if _player_name_candidate_is_complete(
                         text_value,
-                        multiple_visible_glyphs,
+                        orange_aspect,
                     ):
                         observations.append(observation)
                     else:
                         rejected_observations.append(observation)
-
-    # Completeness is relative to the actual candidates as well as the coarse
-    # orange geometry.  If any OCR route recovered more visible characters,
-    # every shorter result is incomplete even when it contains two or more
-    # characters.  This deliberately uses character count, never fixed glyph
-    # widths: “八彩彩” outranks “彩彩” and “八” regardless of their pixel sizes.
-    all_observations = observations + rejected_observations
-    if all_observations:
-        longest_character_count = max(
-            _player_name_character_count(item[0])
-            for item in all_observations
-        )
-        shorter_observations = [
-            item
-            for item in observations
-            if _player_name_character_count(item[0])
-            < longest_character_count
-        ]
-        if shorter_observations:
-            observations = [
-                item
-                for item in observations
-                if _player_name_character_count(item[0])
-                == longest_character_count
-            ]
-            rejected_observations.extend(shorter_observations)
+                if source_consensus():
+                    break
     if not observations:
         if rejected_observations:
-            # Every OCR route saw less text than the orange geometry implies.
-            # Prefer a partial room update over dropping the notification
-            # entirely, but select the most complete/consistent candidate and
-            # leave the existing two-frame event vote in force.  A complete
-            # candidate always wins earlier and never reaches this fallback.
+            # Never revive a gross width mismatch merely because it is the
+            # longest string. Keep retrying later frames instead of recording
+            # a four-glyph hallucination inside a two-glyph orange region.
             rejected_groups: dict[
                 str, list[tuple[str, float, str]]
             ] = {}
@@ -9424,26 +10620,20 @@ def _recognize_player_name_variants(
                 rejected_groups.setdefault(
                     observation[0].casefold(), []
                 ).append(observation)
-            winner = max(
+            closest = min(
                 rejected_groups.values(),
-                key=lambda group: (
-                    _player_name_character_count(group[0][0]),
-                    len({item[2] for item in group}),
-                    max(item[1] for item in group),
+                key=lambda group: _player_name_geometry_error(
+                    group[0][0],
+                    orange_aspect,
                 ),
             )
-            best = max(winner, key=lambda item: item[1])
-            confidence = float(best[1])
-            if len({item[2] for item in winner}) >= 2:
-                confidence = max(confidence, 0.90)
             diagnostics = ", ".join(
-                f"{source}={text_value}({score:.2f}, incomplete)"
+                f"{source}={text_value}({score:.2f}, width-error="
+                f"{_player_name_geometry_error(text_value, orange_aspect):.3f})"
                 for text_value, score, source in rejected_observations
             )
-            diagnostics += (
-                f", incomplete-fallback={best[0]}({confidence:.2f})"
-            )
-            return best[0], confidence, diagnostics
+            diagnostics += f", rejected-best={closest[0][0]}"
+            return "", 0.0, diagnostics
         diagnostics = ", ".join(
             f"{source}={text_value}({score:.2f}, incomplete)"
             for text_value, score, source in rejected_observations
@@ -9455,23 +10645,23 @@ def _recognize_player_name_variants(
         grouped.setdefault(observation[0].casefold(), []).append(observation)
     winner = max(
         grouped.values(),
-        key=lambda group: (
-            _player_name_character_count(group[0][0]),
-            len({item[2] for item in group}),
-            max(item[1] for item in group),
-        ),
+        key=lambda group: _player_name_group_rank(group, orange_aspect),
     )
     best = max(winner, key=lambda item: item[1])
-    confidence = float(best[1])
-    if len({item[2] for item in winner}) >= 2:
-        confidence = max(confidence, 0.90)
+    source_count = len({item[2] for item in winner})
+    confidence = min(
+        0.99,
+        float(best[1]) + 0.04 * max(0, source_count - 1),
+    )
     diagnostics = ", ".join(
-        f"{source}={text_value}({score:.2f})"
+        f"{source}={text_value}({score:.2f}, width-error="
+        f"{_player_name_geometry_error(text_value, orange_aspect):.3f})"
         for text_value, score, source in observations
     )
     if rejected_observations:
         rejected_diagnostics = ", ".join(
-            f"{source}={text_value}({score:.2f}, incomplete)"
+            f"{source}={text_value}({score:.2f}, width-rejected="
+            f"{_player_name_geometry_error(text_value, orange_aspect):.3f})"
             for text_value, score, source in rejected_observations
         )
         diagnostics = f"{diagnostics}, {rejected_diagnostics}"
@@ -9536,13 +10726,23 @@ class PlayerNotificationRecognizer:
         self._failure_capture_reason = ""
         self._icon_visible = False
         self._notification_visible = False
-        # Load the model before the first notification so the one-time ONNX
-        # initialization cost does not consume a short-lived leave banner.
+        # Load the official PaddleOCR model before the first notification so
+        # its one-time initialization does not consume a short-lived banner.
         threading.Thread(
-            target=_player_rapidocr_engine,
+            target=self._warm_up_name_recognizer,
             name="macro6-player-ocr-warmup",
             daemon=True,
         ).start()
+
+    @staticmethod
+    def _warm_up_name_recognizer() -> None:
+        try:
+            warm_up_player_name_recognizer()
+            _timestamped_log(
+                f"玩家名识别接口已就绪：{PLAYER_NAME_MODEL}。"
+            )
+        except PlayerNameRecognizerUnavailable as exc:
+            _timestamped_log(f"玩家名识别接口不可用：{exc}")
 
     def _detect_connection_icon(self, frame: np.ndarray) -> bool:
         """Perform only the small, coarse globe check on the UI thread."""
@@ -10073,26 +11273,55 @@ class PlayerNotificationRecognizer:
                     continue
             status, player_name_crop, status_score, visual_signature = sample
             try:
-                player_name = _single_latin_player_name_fallback(
+                repaired_name_crop = repair_player_name_right_edge(
                     player_name_crop
                 )
-                if player_name:
-                    confidence = 0.99
-                    diagnostics = "orange-geometry=L(0.99)"
-                else:
-                    variants = _player_name_ocr_variants(player_name_crop)
-                    if not variants:
-                        continue
-                    player_name, confidence, diagnostics = (
-                        _recognize_player_name_variants(variants)
-                    )
+                diagnostics = ""
+                try:
+                    player_name = recognize_player_name(repaired_name_crop)
+                except PlayerNameRecognizerUnavailable as exc:
+                    player_name = ""
+                    diagnostics = str(exc)
                 if not player_name:
+                    # This banner has already passed the globe, status and
+                    # orange-name-region checks.  Re-running every queued
+                    # frame after all OCR paths returned empty only blocks
+                    # newer player events and floods the terminal.  Archive
+                    # one untouched name crop as "未知", then consume this
+                    # visual segment without applying it to the room tracker.
+                    with self._lock:
+                        self._last_applied_capture_sequence = max(
+                            self._last_applied_capture_sequence,
+                            work.capture.sequence,
+                        )
+                        self._last_accepted_event = None
+                        self._accepted_segment_ids.add(segment_id)
+                        self._segment_vote_counts.pop(segment_id, None)
+                        self._work_queue = deque(
+                            item
+                            for item in self._work_queue
+                            if item.segment_id != segment_id
+                        )
+                        if len(self._accepted_segment_ids) > 256:
+                            cutoff = self._next_segment_id - 128
+                            self._accepted_segment_ids = {
+                                item
+                                for item in self._accepted_segment_ids
+                                if item >= cutoff
+                            }
+                        self._failure_capture_armed = True
                     _timestamped_log(
-                        "检测到玩家通知，但通用OCR和Windows OCR均未取得"
-                        "玩家名；保留最新横幅并继续重试。"
+                        f"检测到玩家通知，但{PLAYER_NAME_MODEL}未取得"
+                        "玩家名；已将姓名裁剪记为“未知”并舍弃该横幅。"
                     )
                     if diagnostics:
                         _timestamped_log(f"玩家名OCR候选：{diagnostics}")
+                    self._archive.record_player_name_crop(
+                        "未知",
+                        repaired_name_crop,
+                        work.capture.captured_at_utc,
+                        status,
+                    )
                     continue
                 event = (player_name.casefold(), status)
                 with self._lock:
@@ -10158,7 +11387,7 @@ class PlayerNotificationRecognizer:
                 _timestamped_log(
                     f"玩家通知识别：{player_name} / {status} "
                     f"(status_score={status_score:.3f}, "
-                    f"name_confidence={confidence:.3f}, votes={vote_count}, "
+                    f"name_model={PLAYER_NAME_MODEL}, votes={vote_count}, "
                     f"capture_sequence={work.capture.sequence}, "
                     f"segment_id={segment_id}, "
                     "processing_delay_ms="
@@ -10166,7 +11395,7 @@ class PlayerNotificationRecognizer:
                 )
                 if diagnostics:
                     _timestamped_log(f"玩家名OCR候选：{diagnostics}")
-                self._tracker.apply(
+                applied = self._tracker.apply(
                     player_name,
                     status,
                     expected_generation=work.capture.room_generation,
@@ -10184,6 +11413,15 @@ class PlayerNotificationRecognizer:
                         ),
                     ),
                 )
+                # Save exactly the right-edge-repaired image sent to OCR, not
+                # the full frame or a later OCR model tensor.
+                if applied:
+                    self._archive.record_player_name_crop(
+                        player_name,
+                        repaired_name_crop,
+                        work.capture.captured_at_utc,
+                        status,
+                    )
             except Exception as exc:
                 _timestamped_log(f"玩家通知识别失败：{exc}")
 
@@ -10723,6 +11961,7 @@ def render_watchdog_overlay(
         (STAMP_BUTTON_ROI, detection.stamp in {"YES", "NO"}),
         (REWARD_ROI, detection.reward),
         (REWARD_LIST_ROI, detection.reward and detection.reward_lines > 0),
+        (NETWORK_ERROR_CLOSE_ROI, detection.network_error),
         (PLAYER_CONNECTION_ICON_ROI, player_icon_visible),
         (PLAYER_NOTIFICATION_ROI, player_notification_visible),
     )
@@ -10757,6 +11996,7 @@ def render_watchdog_overlay(
         ),
         f"TASKS COMPLETED: {min(3, max(0, completed_tasks))}/3",
         f"STAMP: {detection.stamp}",
+        f"NETWORK ERROR: {'TRUE' if detection.network_error else 'FALSE'}",
         (
             "UPDATES  "
             f"TODAY:{run_count.daily_runs}  "
@@ -10979,8 +12219,10 @@ def main() -> int:
     capture_heartbeat = _HeartbeatFile(CAPTURE_HEARTBEAT_ENV)
     controller = None
     capture: FFmpegCapture | None = None
+    web_publisher: PokopiaWebStatePublisher | None = None
 
     try:
+        web_publisher = PokopiaWebStatePublisher()
         detector = PokopiaDetector()
         visual_state = _PokopiaVisualState()
         run_counter = Macro6RunCounter(
@@ -11048,6 +12290,29 @@ def main() -> int:
         )
         context.macro_profile_name = "macro6"
         context.set_room_player_tracker(room_player_tracker)
+        context.set_web_publisher(web_publisher)
+
+        def record_reopen_screenshot(reason: str) -> None:
+            snapshot = capture.snapshot()
+            frame = (
+                snapshot.raw_frame
+                if snapshot.raw_frame is not None
+                else snapshot.frame
+            )
+            if frame is None:
+                _timestamped_log(
+                    "重开前无可用采集帧，未能保存本轮结束截图。"
+                )
+                return
+            code_archive.record_round_end_screenshot(
+                frame,
+                code_recognizer.snapshot(),
+                run_counter.snapshot(),
+                reason,
+                context.current_macro_key(),
+            )
+
+        context.set_reopen_screenshot_callback(record_reopen_screenshot)
 
         def controller_worker() -> None:
             try:
@@ -11111,6 +12376,7 @@ def main() -> int:
 
         code_panel_detected_since: float | None = None
         room_code_revision = code_recognizer.revision()
+        last_web_update_monotonic = 0.0
         while not stop_event.is_set():
             snapshot = capture.snapshot()
             if snapshot.frame is None:
@@ -11146,12 +12412,69 @@ def main() -> int:
             room_disconnected, displayed_room_players = (
                 room_player_tracker.display_snapshot()
             )
+            count_snapshot = run_counter.snapshot()
+            timer_elapsed = code_recognizer.timer_elapsed_seconds()
+            now_web_update = time.monotonic()
+            if now_web_update - last_web_update_monotonic >= 0.25:
+                last_web_update_monotonic = now_web_update
+                timer_active = context.web_phase_key() == "stamp_cycle"
+                web_publisher.update(
+                    code=code_recognizer.snapshot(),
+                    code_revision=current_code_revision,
+                    macro_key=context.current_macro_key(),
+                    operation_locked=context.operation_locked(),
+                    room_disconnected=room_disconnected,
+                    players=[
+                        {"name": name, "status": status}
+                        for name, status in displayed_room_players
+                    ],
+                    counts={
+                        "operational_date": count_snapshot.operational_date,
+                        "daily_runs": count_snapshot.daily_runs,
+                        "total_runs": count_snapshot.total_runs,
+                        "round_player_entries": room_player_tracker.current_round_entries(),
+                        "round_player_entry_failures": room_player_tracker.current_round_entry_failures(),
+                        "daily_player_entries": count_snapshot.daily_player_entries,
+                        "total_player_entries": count_snapshot.total_player_entries,
+                        "daily_player_entry_failures": count_snapshot.daily_player_entry_failures,
+                        "total_player_entry_failures": count_snapshot.total_player_entry_failures,
+                    },
+                    tasks={
+                        "completed": visual_state.completed_tasks(),
+                        "total": 3,
+                    },
+                    timer={
+                        "elapsed_seconds": (
+                            round(timer_elapsed, 1)
+                            if timer_elapsed is not None
+                            else None
+                        ),
+                        "limit_seconds": CODE_TIMER_RESTART_SECONDS,
+                        "remaining_seconds": (
+                            max(0.0, round(CODE_TIMER_RESTART_SECONDS - timer_elapsed, 1))
+                            if timer_elapsed is not None and timer_active
+                            else None
+                        ),
+                        "active": timer_active,
+                    },
+                    detection={
+                        "save_finished": detection.save_finished,
+                        "black_screen": detection.black_screen,
+                        "connect_ok": detection.connect_ok,
+                        "code_panel": detection.code_panel,
+                        "cursor": detection.cursor,
+                        "reward": detection.reward,
+                        "reward_lines": detection.reward_lines,
+                        "stamp": detection.stamp,
+                        "network_error": detection.network_error,
+                    },
+                )
             display = render_watchdog_overlay(
                 snapshot.frame,
                 detection,
                 code_recognizer.snapshot(),
-                run_counter.snapshot(),
-                code_recognizer.timer_elapsed_seconds(),
+                count_snapshot,
+                timer_elapsed,
                 visual_state.completed_tasks(),
                 displayed_room_players,
                 room_disconnected,
@@ -11231,6 +12554,8 @@ def main() -> int:
                 controller.close()
         if capture is not None:
             capture.close()
+        if web_publisher is not None:
+            web_publisher.close(clean_exit=True)
         with contextlib.suppress(Exception):
             cv2.destroyAllWindows()
 

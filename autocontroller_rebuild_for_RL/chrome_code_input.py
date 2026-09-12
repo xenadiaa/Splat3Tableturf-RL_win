@@ -48,8 +48,9 @@ def input_code_to_chrome(
     code: str,
     *,
     expanded_text: str | None = None,
+    send: bool = True,
 ) -> ChromeCodeInputResult:
-    """Fill the expanded CODE text into Xiaohongshu and press Enter to send.
+    """Fill expanded CODE text and optionally press Enter to send it.
 
     Chrome must already be running with a remote-debugging port.  Configuration
     can be overridden with these environment variables:
@@ -129,7 +130,8 @@ def input_code_to_chrome(
             textbox.press("Shift+Enter")
             if line:
                 target_page.keyboard.insert_text(line)
-        textbox.press("Enter")
+        if send:
+            textbox.press("Enter")
         return ChromeCodeInputResult(
             code=normalized_code,
             text=text,
@@ -142,10 +144,24 @@ def main() -> int:
         description="把六位 CODE 填入远程调试 Chrome并发送。"
     )
     parser.add_argument("code", help="六位数字/字母 CODE")
+    parser.add_argument(
+        "--text",
+        help="要输入的完整测试文字；其中必须包含对应的六位CODE。",
+    )
+    parser.add_argument(
+        "--no-send",
+        action="store_true",
+        help="只填入聊天框，不按Enter发送。",
+    )
     args = parser.parse_args()
-    result = input_code_to_chrome(args.code)
+    result = input_code_to_chrome(
+        args.code,
+        expanded_text=args.text,
+        send=not args.no_send,
+    )
+    action = "输入但未发送" if args.no_send else "输入并发送"
     print(
-        f"已在 {result.page_title!r} 输入并发送 {result.text!r}。",
+        f"已在 {result.page_title!r} {action} {result.text!r}。",
         flush=True,
     )
     return 0

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102f3d">
+  <meta name="description" content="满当当集章的城镇梦幻章车实时状态、房间动态与历史服务统计。">
+  <title>梦幻章车 · 实时状态</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="返回实时状态首页">
+      <span class="brand-mark">章</span>
+      <span><b>满当当集章的城镇</b><small>梦幻章车实时播报</small></span>
+    </a>
+    <div class="top-actions">
+      <span id="last-updated" class="last-updated">正在连接…</span>
+      <button class="soft-button" id="rank-button" type="button">排行榜</button>
+      <button class="soft-button" id="query-button" type="button">数据查询</button>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section class="hero-grid" aria-labelledby="current-code-title">
+      <article class="code-card panel">
+        <div class="status-line">
+          <span id="status-pill" class="status-pill is-starting"><i></i>正在启动</span>
+          <span id="phase-label" class="phase-label">正在读取 watchdog 状态</span>
+        </div>
+        <p class="eyebrow" id="current-code-title">当前轮次 STAMP CODE</p>
+        <div id="code-value" class="code-value" aria-live="polite">------</div>
+        <button id="copy-code" class="copy-code" type="button" disabled>复制 CODE</button>
+        <p id="round-label" class="round-label">等待新轮次</p>
+      </article>
+
+      <article class="screenshot-card panel">
+        <div class="section-heading compact">
+          <div><p class="eyebrow">本轮识别存档</p><h2>CODE 截图</h2></div>
+          <span class="live-dot">LIVE</span>
+        </div>
+        <div class="screenshot-stage">
+          <img id="code-screenshot" alt="当前轮次CODE识别截图" hidden>
+          <div id="screenshot-empty" class="empty-visual">新CODE识别后将在这里显示原始截图</div>
+        </div>
+      </article>
+    </section>
+
+    <section class="pulse-grid">
+      <article class="metric-card task-card">
+        <p>当前任务完成</p>
+        <strong><span id="task-count">0</span><small>/3</small></strong>
+        <div class="progress-track"><span id="task-progress"></span></div>
+      </article>
+      <article class="metric-card timer-card">
+        <p>本轮预计剩余</p>
+        <strong id="countdown">--:--</strong>
+        <small id="deadline-label">等待轮次开放</small>
+      </article>
+      <article class="metric-card">
+        <p>本轮服务</p>
+        <strong id="round-success">0</strong><small>成功</small>
+        <span class="metric-sub"><b id="round-failure">0</b> 次失败</span>
+      </article>
+      <article class="metric-card">
+        <p>本日服务</p>
+        <strong id="day-success">0</strong><small>成功</small>
+        <span class="metric-sub"><b id="day-failure">0</b> 次失败</span>
+      </article>
+      <article class="metric-card">
+        <p>历史总计</p>
+        <strong id="total-success">0</strong><small>成功</small>
+        <span class="metric-sub"><b id="total-failure">0</b> 次失败</span>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel room-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">RIGHT NOW</p><h2>当前房间玩家</h2></div>
+          <span id="room-count" class="count-badge">0 人</span>
+        </div>
+        <div id="player-list" class="player-list">
+          <div class="empty-state">暂时没有玩家状态</div>
+        </div>
+      </article>
+
+      <article class="panel summary-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">ROUND BRIEF</p><h2>轮次与重开信息</h2></div>
+        </div>
+        <div class="summary-block">
+          <span>上轮总结</span><p id="previous-summary">暂无上轮完整记录</p>
+        </div>
+        <div class="summary-block accent">
+          <span>本次重开</span><p id="restart-summary">正在等待首轮数据</p>
+        </div>
+        <details class="announcement-details">
+          <summary>查看完整播报文字</summary>
+          <pre id="announcement-text">尚未生成开放播报</pre>
+        </details>
+      </article>
+    </section>
+
+    <section class="log-grid">
+      <article class="panel timeline-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">TASK LOG</p><h2>本轮任务记录</h2></div>
+        </div>
+        <ol id="task-events" class="timeline"><li class="empty-state">本轮尚无任务完成记录</li></ol>
+      </article>
+      <article class="panel timeline-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">PLAYER LOG</p><h2>本轮玩家进出</h2></div>
+        </div>
+        <ol id="player-events" class="timeline"><li class="empty-state">本轮尚无玩家进出记录</li></ol>
+      </article>
+    </section>
+
+    <section class="panel recent-panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">RECENT ROUNDS</p><h2>近期轮次回顾</h2></div>
+      </div>
+      <div id="recent-rounds" class="recent-rounds"><div class="empty-state">暂无已结算轮次</div></div>
+    </section>
+  </main>
+
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="side-drawer" class="side-drawer" aria-hidden="true" aria-label="数据侧栏">
+    <div class="drawer-head">
+      <div><p class="eyebrow" id="drawer-eyebrow">DATA</p><h2 id="drawer-title">数据面板</h2></div>
+      <button id="drawer-close" class="icon-button" type="button" aria-label="关闭侧栏">×</button>
+    </div>
+
+    <section id="ranking-pane" class="drawer-pane" hidden>
+      <div class="segmented" role="group" aria-label="排行榜周期">
+        <button data-period="day">日</button><button data-period="week">周</button>
+        <button data-period="month">月</button><button data-period="year">年</button>
+        <button data-period="all" class="active">总计</button>
+      </div>
+      <p class="range-caption" id="ranking-range">全部业务日期 · 前10名</p>
+      <div class="ranking-group"><h3>来访成功次数</h3><ol id="visit-ranking" class="ranking-list"></ol></div>
+      <div class="ranking-group"><h3>参与完成任务数</h3><ol id="task-ranking" class="ranking-list"></ol></div>
+      <div class="ranking-group"><h3>进入失败次数</h3><ol id="failure-ranking" class="ranking-list"></ol></div>
+    </section>
+
+    <section id="query-pane" class="drawer-pane" hidden>
+      <form id="query-form" class="query-form">
+        <label>周期快捷选择<select id="query-period" name="period">
+          <option value="all">全部范围</option><option value="day">当前业务日</option>
+          <option value="week">本周（周五05:00）</option><option value="month">本月</option>
+          <option value="year">本年</option>
+        </select></label>
+        <div class="date-pair">
+          <label>开始业务日期<input type="date" id="query-start" name="start"></label>
+          <label>结束业务日期<input type="date" id="query-end" name="end"></label>
+        </div>
+        <label>玩家名模糊查询<input type="search" id="query-player" name="player" placeholder="例如：小（匹配小玲、小猫）"></label>
+        <button class="primary-button" type="submit">查询数据</button>
+      </form>
+      <div id="query-meta" class="query-meta">不指定时间和玩家时查询全部范围。</div>
+      <div id="query-summary" class="mini-summary"></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>业务日期</th><th>轮次</th><th>成功</th><th>失败</th><th>任务参与</th></tr></thead>
+        <tbody id="daily-table"></tbody><tfoot id="daily-total"></tfoot>
+      </table></div>
+      <div class="ranking-group"><h3>来访成功排名</h3><ol id="query-visits" class="ranking-list"></ol></div>
+      <div class="ranking-group"><h3>任务完成排名</h3><ol id="query-tasks" class="ranking-list"></ol></div>
+      <div class="ranking-group"><h3>失败次数排名</h3><ol id="query-failures" class="ranking-list"></ol></div>
+    </section>
+  </aside>
+
+  <footer><span>业务日以北京时间 05:00 为分界</span><span>页面仅展示公开只读状态</span></footer>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "pokopia-stamp-edge",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "check": "node --check src/worker.js",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "migrate": "wrangler d1 migrations apply DB --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

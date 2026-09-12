@@ -25,6 +25,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
@@ -73,6 +74,8 @@ from switch_connect.virtual_gamepad.input_mapper import (
     BIT_PLUS,
     BIT_R,
     BIT_X,
+    BIT_ZL,
+    BIT_ZR,
 )
 
 
@@ -120,6 +123,24 @@ LRA_REPEAT_RELEASE_MS = 50
 LRA_REPEAT_TOTAL_MS = 28_000
 LRA_FORWARD_START_MS = 25_200
 LRA_FORWARD_DURATION_MS = 2_800
+ZL_ZR_COMBO_HOLD_MS = 100
+PRESS_PROMPT_POST_WAIT_SECONDS = 5.0
+PRESS_PROMPT_CONFIRM_FRAMES = 2
+PRESS_PROMPT_CLEAR_FRAMES = 3
+PRESS_PROMPT_MIN_SCORE = 0.82
+PRESS_PROMPT_ROI = (0.835, 0.960, 0.800, 0.945)
+PRESS_PROMPT_TEMPLATE_SHAPE = (80, 160)
+# Consensus neutral-white glyph mask built from all seven 2026-09-01 title
+# screen samples. Runtime recognition is self-contained and never opens Pic.
+PRESS_PROMPT_TEMPLATE_ZLIB_B64 = (
+    "eNrt1LFuwyAQBmAQVdwpvEBkxr6EFR4Nogx5LSwPfY1UfQGkLhks/t5B4lzSSu3Q"
+    "oVKLB58+4MwBslL/7cv2KGJ/GjJUoUfY7F8wYg9h297vx9fp+RClbc2ObJ+utukH"
+    "M06pE8OqgSzd21j0LG0zmKRCDB/M3CRkm9Kt9QPZNB3k+txp0NjByDpcHhTXK7/b"
+    "cy13e7T5ZN9+2n5107heiSec6rsDtVyvCAWtn6PWHTiqZ8wB5ppkmVEjPgmDZUYzO"
+    "jG7mC4BKXAa/0bZQjVKFT2OZFmtlOXMZlY6hsXMxdLVdBFmhXVFWrerhnIxZDJeqc"
+    "VsLnZcP+hm2ZK9IHukLRVDq3c4Oh7HFgsNqZZ4bqK5hS6Y5YocIt1lpDWbpU9ylWe"
+    "r4+zKSGvjukOz2WTVIjiLlg/nLfdL9C2L0tyd1V3jjoD4536N79CDL6g="
+)
 # Start a fresh statistics generation.  The former macro5_history.json is no
 # longer read or modified, so it remains available as a manual backup.
 LOOT_HISTORY_FILENAME = "macro5_history_v2.json"
@@ -276,6 +297,57 @@ RESULT_TEMPLATE_MASK = np.unpackbits(
 )[: RESULT_TEMPLATE_SHAPE[0] * RESULT_TEMPLATE_SHAPE[1]].reshape(
     RESULT_TEMPLATE_SHAPE
 ).astype(bool)
+PRESS_PROMPT_TEMPLATE_MASK = np.unpackbits(
+    np.frombuffer(
+        zlib.decompress(
+            base64.b64decode(PRESS_PROMPT_TEMPLATE_ZLIB_B64)
+        ),
+        dtype=np.uint8,
+    )
+)[: PRESS_PROMPT_TEMPLATE_SHAPE[0] * PRESS_PROMPT_TEMPLATE_SHAPE[1]].reshape(
+    PRESS_PROMPT_TEMPLATE_SHAPE
+).astype(bool)
+
+# These morphology inputs depend only on the embedded templates.  Building
+# them once avoids repeating the same allocations and dilations on every
+# preview-analysis frame.
+MATCH_KERNEL_3 = np.ones((3, 3), dtype=np.uint8)
+CLEAR_KERNEL_5 = np.ones((5, 5), dtype=np.uint8)
+RESULT_TEMPLATE_DILATED = cv2.dilate(
+    RESULT_TEMPLATE_MASK.astype(np.uint8),
+    MATCH_KERNEL_3,
+    iterations=1,
+).astype(bool)
+RESULT_TEMPLATE_PIXEL_COUNT = max(
+    1,
+    int(np.count_nonzero(RESULT_TEMPLATE_MASK)),
+)
+PRESS_PROMPT_TEMPLATE_DILATED = cv2.dilate(
+    PRESS_PROMPT_TEMPLATE_MASK.astype(np.uint8),
+    MATCH_KERNEL_3,
+    iterations=1,
+).astype(bool)
+PRESS_PROMPT_TEMPLATE_PIXEL_COUNT = max(
+    1,
+    int(np.count_nonzero(PRESS_PROMPT_TEMPLATE_MASK)),
+)
+BASE_HUD_TEMPLATE_DILATED_MASKS = tuple(
+    cv2.dilate(
+        template.astype(np.uint8),
+        MATCH_KERNEL_3,
+        iterations=1,
+    ).astype(bool)
+    for template in BASE_HUD_TEMPLATE_MASKS
+)
+LIFE_ICON_TEMPLATE_DILATED = cv2.dilate(
+    LIFE_ICON_TEMPLATE_MASK.astype(np.uint8),
+    MATCH_KERNEL_3,
+    iterations=1,
+).astype(bool)
+LIFE_ICON_TEMPLATE_PIXEL_COUNT = max(
+    1,
+    int(np.count_nonzero(LIFE_ICON_TEMPLATE_MASK)),
+)
 
 
 @dataclass(frozen=True)
@@ -499,10 +571,14 @@ class _RestartableMacroContext(_MacroContext):
         pause_state: _PauseState,
         restart_event: threading.Event,
         heartbeat: _HeartbeatFile,
+        external_hold_event: threading.Event,
+        external_hold_ack_event: threading.Event,
     ) -> None:
         super().__init__(controller, stop_event, pause_state)
         self.restart_event = restart_event
         self.heartbeat = heartbeat
+        self.external_hold_event = external_hold_event
+        self.external_hold_ack_event = external_hold_ack_event
 
     def send_active_bits(self) -> None:
         self.heartbeat.beat()
@@ -512,11 +588,40 @@ class _RestartableMacroContext(_MacroContext):
         if self.restart_event.is_set():
             raise _RestartRequested
 
+    def _service_external_hold(self) -> bool:
+        """Freeze the current macro position during title-screen recovery."""
+        if not self.external_hold_event.is_set():
+            return True
+        active_started = self.pause_state.active_monotonic()
+        self.controller.release()
+        self.external_hold_ack_event.set()
+        try:
+            while self.external_hold_event.is_set():
+                self.heartbeat.beat()
+                self._raise_if_restart_requested()
+                if self.stop_event.wait(0.05):
+                    return False
+                if self.status_callback is not None:
+                    self.status_callback(False)
+        finally:
+            active_elapsed = max(
+                0.0,
+                self.pause_state.active_monotonic() - active_started,
+            )
+            self.pause_state.exclude_elapsed(active_elapsed)
+            self.external_hold_ack_event.clear()
+        self._raise_if_restart_requested()
+        if not self.pause_state.is_paused():
+            self.send_active_bits()
+        return not self.stop_event.is_set()
+
     def _raw_wait_ms(self, duration_ms: int) -> bool:
         remaining = max(0, duration_ms) / 1000.0
         while remaining > 0:
             self.heartbeat.beat()
             self._raise_if_restart_requested()
+            if not self._service_external_hold():
+                return False
             if self.stop_event.is_set():
                 return False
             wait_seconds = min(remaining, 0.05)
@@ -574,6 +679,8 @@ class _RestartableMacroContext(_MacroContext):
         while remaining > 0:
             self.heartbeat.beat()
             self._raise_if_restart_requested()
+            if not self._service_external_hold():
+                return False
             if not self._service_pause():
                 return False
             if self.status_callback is not None:
@@ -587,6 +694,8 @@ class _RestartableMacroContext(_MacroContext):
             if not self.pause_state.is_paused():
                 remaining -= max(0.0, self.active_monotonic() - started_wait)
         self._raise_if_restart_requested()
+        if not self._service_external_hold():
+            return False
         return self._service_pause()
 
 
@@ -689,6 +798,13 @@ class ClearScreenDetection:
 
 @dataclass(frozen=True)
 class ResultScreenDetection:
+    detected: bool
+    white_fraction: float
+    template_match: float
+
+
+@dataclass(frozen=True)
+class PressPromptDetection:
     detected: bool
     white_fraction: float
     template_match: float
@@ -1263,6 +1379,56 @@ def _fractional_crop(
     ]
 
 
+def detect_press_prompt(frame: np.ndarray) -> PressPromptDetection:
+    """Detect the fixed lower-right title-screen ``press ZL + ZR`` glyphs."""
+    empty = PressPromptDetection(False, 0.0, 0.0)
+    if frame is None or frame.size == 0 or frame.ndim != 3:
+        return empty
+    roi = _fractional_crop(frame, *PRESS_PROMPT_ROI)
+    if roi.size == 0:
+        return empty
+    normalized = cv2.resize(
+        roi,
+        (
+            PRESS_PROMPT_TEMPLATE_SHAPE[1],
+            PRESS_PROMPT_TEMPLATE_SHAPE[0],
+        ),
+        interpolation=cv2.INTER_AREA,
+    )
+    channel_min = normalized.min(axis=2)
+    channel_max = normalized.max(axis=2)
+    candidate = (
+        (channel_min >= 185)
+        & (
+            channel_max.astype(np.int16)
+            - channel_min.astype(np.int16)
+            <= 55
+        )
+    )
+    white_fraction = float(np.mean(candidate))
+    candidate_dilated = cv2.dilate(
+        candidate.astype(np.uint8),
+        MATCH_KERNEL_3,
+        iterations=1,
+    ).astype(bool)
+    recall = float(
+        np.count_nonzero(
+            PRESS_PROMPT_TEMPLATE_MASK & candidate_dilated
+        )
+        / PRESS_PROMPT_TEMPLATE_PIXEL_COUNT
+    )
+    precision = float(
+        np.count_nonzero(candidate & PRESS_PROMPT_TEMPLATE_DILATED)
+        / max(1, int(np.count_nonzero(candidate)))
+    )
+    template_match = min(recall, precision)
+    return PressPromptDetection(
+        template_match >= PRESS_PROMPT_MIN_SCORE,
+        white_fraction,
+        template_match,
+    )
+
+
 def detect_inventory_full_popup(frame: np.ndarray) -> InventoryFullDetection:
     """Detect the fixed weapon-inventory-full warning dialog.
 
@@ -1779,7 +1945,7 @@ def detect_clear_screen(frame: np.ndarray) -> ClearScreenDetection:
     yellow_fraction = float(np.mean(yellow_mask))
     yellow_dilated = cv2.dilate(
         yellow_mask.astype(np.uint8),
-        np.ones((5, 5), dtype=np.uint8),
+        CLEAR_KERNEL_5,
         iterations=1,
     ).astype(bool)
     template_pixel_count = int(np.count_nonzero(CLEAR_TEMPLATE_MASK))
@@ -1820,23 +1986,17 @@ def detect_result_screen(frame: np.ndarray) -> ResultScreenDetection:
         & ((channel_max - channel_min) <= 65)
     )
     white_fraction = float(np.mean(white_mask))
-    match_kernel = np.ones((3, 3), dtype=np.uint8)
     white_dilated = cv2.dilate(
         white_mask.astype(np.uint8),
-        match_kernel,
-        iterations=1,
-    ).astype(bool)
-    template_dilated = cv2.dilate(
-        RESULT_TEMPLATE_MASK.astype(np.uint8),
-        match_kernel,
+        MATCH_KERNEL_3,
         iterations=1,
     ).astype(bool)
     recall = float(
         np.count_nonzero(RESULT_TEMPLATE_MASK & white_dilated)
-        / max(1, int(np.count_nonzero(RESULT_TEMPLATE_MASK)))
+        / RESULT_TEMPLATE_PIXEL_COUNT
     )
     precision = float(
-        np.count_nonzero(white_mask & template_dilated)
+        np.count_nonzero(white_mask & RESULT_TEMPLATE_DILATED)
         / max(1, int(np.count_nonzero(white_mask)))
     )
     template_match = min(recall, precision)
@@ -1907,10 +2067,9 @@ def detect_base_hud(frame: np.ndarray) -> BaseHudDetection:
         & BASE_HUD_VALID_MASK
         & BASE_HUD_ROW_MASK
     ).astype(np.uint8)
-    match_kernel = np.ones((3, 3), dtype=np.uint8)
     candidate_dilated = cv2.dilate(
         candidate_mask,
-        match_kernel,
+        MATCH_KERNEL_3,
         iterations=1,
     ).astype(bool)
     def row_match(
@@ -1935,12 +2094,10 @@ def detect_base_hud(frame: np.ndarray) -> BaseHudDetection:
     # frame.  Score them independently so the in-stage single "- Pause" row
     # can never borrow pixels from nearby HUD text to pass as the base menu.
     template_scores: list[tuple[float, float]] = []
-    for template in BASE_HUD_TEMPLATE_MASKS:
-        template_dilated = cv2.dilate(
-            template.astype(np.uint8),
-            match_kernel,
-            iterations=1,
-        ).astype(bool)
+    for template, template_dilated in zip(
+        BASE_HUD_TEMPLATE_MASKS,
+        BASE_HUD_TEMPLATE_DILATED_MASKS,
+    ):
         template_scores.append(
             (
                 row_match(template, template_dilated, 22, 42),
@@ -2034,13 +2191,6 @@ def detect_in_game_life(frame: np.ndarray) -> WhiteIconDetection:
         return WhiteIconDetection(False)
 
     height, width = frame.shape[:2]
-    match_kernel = np.ones((3, 3), dtype=np.uint8)
-    template_dilated = cv2.dilate(
-        LIFE_ICON_TEMPLATE_MASK.astype(np.uint8),
-        match_kernel,
-        iterations=1,
-    ).astype(bool)
-    template_pixels = max(1, int(np.count_nonzero(LIFE_ICON_TEMPLATE_MASK)))
     slot_scores: list[float] = []
     slot_white_fractions: list[float] = []
     slot_present: list[bool] = []
@@ -2071,16 +2221,16 @@ def detect_in_game_life(frame: np.ndarray) -> WhiteIconDetection:
         white_fraction = float(np.mean(candidate_mask))
         candidate_dilated = cv2.dilate(
             candidate_mask.astype(np.uint8),
-            match_kernel,
+            MATCH_KERNEL_3,
             iterations=1,
         ).astype(bool)
         candidate_pixels = max(1, int(np.count_nonzero(candidate_mask)))
         recall = float(
             np.count_nonzero(LIFE_ICON_TEMPLATE_MASK & candidate_dilated)
-            / template_pixels
+            / LIFE_ICON_TEMPLATE_PIXEL_COUNT
         )
         precision = float(
-            np.count_nonzero(candidate_mask & template_dilated)
+            np.count_nonzero(candidate_mask & LIFE_ICON_TEMPLATE_DILATED)
             / candidate_pixels
         )
         score = min(recall, precision)
@@ -2209,8 +2359,17 @@ class FFmpegCapture:
         self._source: FFmpegCaptureSource | None = None
         self._thread: threading.Thread | None = None
 
-    def snapshot(self) -> FrameSnapshot:
+    def snapshot(self, after_sequence: int | None = None) -> FrameSnapshot:
         with self._lock:
+            if (
+                after_sequence is not None
+                and self._snapshot.sequence == after_sequence
+            ):
+                return FrameSnapshot(
+                    self._snapshot.sequence,
+                    None,
+                    self._snapshot.error,
+                )
             frame = None if self._snapshot.frame is None else self._snapshot.frame.copy()
             return FrameSnapshot(self._snapshot.sequence, frame, self._snapshot.error)
 
@@ -3051,8 +3210,63 @@ def request_macro_restart(
     _timestamped_log(reason)
 
 
+def send_zl_zr_combo(
+    context: _MacroContext,
+    *,
+    isolated: bool = False,
+    source: str = "U指令",
+) -> None:
+    """Overlay one simultaneous ZL+ZR pulse and restore the current state."""
+    combo_bits = (1 << BIT_ZL) | (1 << BIT_ZR)
+    paused = context.is_paused()
+    base_bits = 0 if isolated or paused else context.active_bits
+    context.controller.send_bits(base_bits | combo_bits)
+    context.stop_event.wait(ZL_ZR_COMBO_HOLD_MS / 1000.0)
+    restore_bits = (
+        0
+        if isolated or context.is_paused()
+        else context.active_bits
+    )
+    context.controller.send_bits(restore_bits)
+    _timestamped_log(
+        f"{source}：ZL+ZR已同时按下{ZL_ZR_COMBO_HOLD_MS}ms并释放。"
+    )
+
+
+def run_press_prompt_recovery(
+    context: _RestartableMacroContext,
+    hold_event: threading.Event,
+    hold_ack_event: threading.Event,
+    action_in_progress_event: threading.Event,
+) -> None:
+    """Press the title prompt once, wait five seconds, then resume the macro."""
+    if action_in_progress_event.is_set():
+        return
+    action_in_progress_event.set()
+    hold_event.set()
+    try:
+        # Let the macro worker release its current state before sending the
+        # isolated title-screen combination. If it is already manually paused
+        # or between actions, the timeout still allows recovery to proceed.
+        hold_ack_event.wait(0.5)
+        send_zl_zr_combo(
+            context,
+            isolated=True,
+            source="检测到PRESS提示",
+        )
+        _timestamped_log(
+            f"PRESS提示已处理：暂停原宏"
+            f"{PRESS_PROMPT_POST_WAIT_SECONDS:g}秒后继续。"
+        )
+        context.stop_event.wait(PRESS_PROMPT_POST_WAIT_SECONDS)
+    finally:
+        hold_event.clear()
+        action_in_progress_event.clear()
+
+
 def listen_for_watchdog_keyboard(
     context: _MacroContext,
+    combo_context: _MacroContext,
     pause_state: _PauseState,
     restart_event: threading.Event,
     restart_needs_detection_event: threading.Event,
@@ -3060,7 +3274,7 @@ def listen_for_watchdog_keyboard(
     history: Macro5History,
     worker_errors: List[BaseException],
 ) -> None:
-    """P pauses, R restarts, L/H report stats, and E edits history."""
+    """P pauses, R restarts, U sends ZL+ZR, L/H report, E edits."""
     if sys.platform != "win32":
         _listen_for_keyboard_control(context, pause_state, worker_errors)
         return
@@ -3097,6 +3311,9 @@ def listen_for_watchdog_keyboard(
                         "收到R重开指令：已释放手柄；重新检测连接后从X开始。"
                     ),
                 )
+                continue
+            if key.lower() == "u":
+                send_zl_zr_combo(combo_context)
                 continue
             if key and not _handle_terminal_control_key(
                 key,
@@ -3263,6 +3480,9 @@ def main() -> int:
     restart_in_progress_event = threading.Event()
     restart_in_progress_event.set()
     sale_in_progress_event = threading.Event()
+    press_prompt_hold_event = threading.Event()
+    press_prompt_hold_ack_event = threading.Event()
+    press_prompt_action_event = threading.Event()
     pause_state = _PauseState()
     bar_monitor = ContinuousBarMonitor()
     worker_errors: List[BaseException] = []
@@ -3318,6 +3538,8 @@ def main() -> int:
             pause_state,
             restart_event,
             macro_heartbeat,
+            press_prompt_hold_event,
+            press_prompt_hold_ack_event,
         )
         macro_heartbeat.beat(force=True)
         keyboard_context = _MacroContext(controller, stop_event, pause_state)
@@ -3381,6 +3603,7 @@ def main() -> int:
                 target=listen_for_watchdog_keyboard,
                 args=(
                     keyboard_context,
+                    macro_context,
                     pause_state,
                     restart_event,
                     restart_needs_detection_event,
@@ -3397,6 +3620,7 @@ def main() -> int:
 
         print(
             "\n智能 macro5 已启动：P=暂停/恢复，R=丢弃当前进度并从X重开，"
+            "U=同时按下ZL+ZR，"
             "L=查看本次启动逐轮记录，H=查看过去永久总和，"
             "E=编辑永久统计，Q=退出。"
             "\n外层防卡死监控已启用：程序彻底无响应时会自动完整重启并从X开始。"
@@ -3416,66 +3640,171 @@ def main() -> int:
         base_hud_elapsed = 0.0
         base_hud_variant: str | None = None
 
+        # Keep video input at its configured frame rate, but avoid spending a
+        # full detector pass on every frame.  Critical watchdog state runs at
+        # about 15 Hz; detectors used only by the preview/debug overlay run at
+        # about 5 Hz.  Frame-sequence strides scale automatically with the
+        # configured capture FPS and also guarantee that the same frame is
+        # never analysed twice.
+        input_fps = max(1, int(capture_settings.fps))
+        critical_target_fps = min(input_fps, 15)
+        debug_target_fps = min(input_fps, 5)
+        critical_frame_stride = max(
+            1,
+            int(round(input_fps / critical_target_fps)),
+        )
+        debug_frame_stride = max(
+            1,
+            int(round(input_fps / debug_target_fps)),
+        )
+        actual_critical_fps = input_fps / critical_frame_stride
+        actual_debug_fps = input_fps / debug_frame_stride
+        _timestamped_log(
+            "识别调度已启用："
+            f"输入{input_fps}fps，关键检测约{actual_critical_fps:g}fps，"
+            f"调试检测约{actual_debug_fps:g}fps。"
+        )
+        last_display_sequence = -1
+        last_critical_sequence = -1
+        last_debug_sequence = -1
+        detection = BarDetection(False, 0, 0, 0.0)
+        shiver_detection = ShiverPageDetection(False, 0.0, 0.0, 0.0)
+        clear_detection = ClearScreenDetection(False, 0.0, 0.0)
+        result_detection = ResultScreenDetection(False, 0.0, 0.0)
+        base_hud_detection = BaseHudDetection(
+            False,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+        )
+        loot_detection = LootPageDetection(
+            False,
+            0.0,
+            0.0,
+            0.0,
+            False,
+            False,
+            0.0,
+            0.0,
+        )
+        white_icon_detection = WhiteIconDetection(False)
+        press_prompt_detection = PressPromptDetection(False, 0.0, 0.0)
+        press_prompt_confirm_count = 0
+        press_prompt_clear_count = 0
+        press_prompt_latched = False
+
         while not stop_event.is_set():
-            snapshot = capture.snapshot()
+            snapshot = capture.snapshot(after_sequence=last_display_sequence)
             if snapshot.frame is None:
                 time.sleep(0.03)
                 continue
-            display = snapshot.frame.copy()
-            detection = detect_battle_bar(display)
-            bar_monitor.update(
-                detection.detected,
-                macro_context.active_monotonic(),
+            last_display_sequence = snapshot.sequence
+            # snapshot() already returned a private copy; draw directly onto
+            # it instead of copying another 960x540 BGR image every frame.
+            display = snapshot.frame
+            critical_updated = (
+                last_critical_sequence < 0
+                or snapshot.sequence - last_critical_sequence
+                >= critical_frame_stride
             )
-            shiver_detection = detect_shiver_page(display)
-            clear_detection = detect_clear_screen(display)
-            result_detection = detect_result_screen(display)
-            base_hud_detection = detect_base_hud(display)
-            loot_detection = detect_loot_page(display)
-            white_icon_detection = detect_in_game_life(display)
+            if critical_updated:
+                last_critical_sequence = snapshot.sequence
+                detection = detect_battle_bar(display)
+                base_hud_detection = detect_base_hud(display)
+                press_prompt_detection = detect_press_prompt(display)
+                bar_monitor.update(
+                    detection.detected,
+                    macro_context.active_monotonic(),
+                )
+                if press_prompt_detection.detected:
+                    press_prompt_confirm_count += 1
+                    press_prompt_clear_count = 0
+                    if (
+                        press_prompt_confirm_count
+                        >= PRESS_PROMPT_CONFIRM_FRAMES
+                        and not press_prompt_latched
+                        and not press_prompt_action_event.is_set()
+                    ):
+                        press_prompt_latched = True
+                        threading.Thread(
+                            target=run_press_prompt_recovery,
+                            args=(
+                                macro_context,
+                                press_prompt_hold_event,
+                                press_prompt_hold_ack_event,
+                                press_prompt_action_event,
+                            ),
+                            name="macro5-press-prompt-recovery",
+                            daemon=True,
+                        ).start()
+                else:
+                    press_prompt_confirm_count = 0
+                    press_prompt_clear_count += 1
+                    if (
+                        press_prompt_clear_count
+                        >= PRESS_PROMPT_CLEAR_FRAMES
+                        and not press_prompt_action_event.is_set()
+                    ):
+                        press_prompt_latched = False
+            if (
+                last_debug_sequence < 0
+                or snapshot.sequence - last_debug_sequence
+                >= debug_frame_stride
+            ):
+                last_debug_sequence = snapshot.sequence
+                shiver_detection = detect_shiver_page(display)
+                clear_detection = detect_clear_screen(display)
+                result_detection = detect_result_screen(display)
+                loot_detection = detect_loot_page(display)
+                white_icon_detection = detect_in_game_life(display)
             base_watchdog_suspended = (
                 pause_state.is_paused()
                 or sale_in_progress_event.is_set()
                 or restart_in_progress_event.is_set()
                 or detection.detected
             )
-            if base_hud_detection.detected and not base_watchdog_suspended:
-                now = time.monotonic()
-                if (
-                    base_hud_since is None
-                    or base_hud_variant != base_hud_detection.variant
-                ):
-                    base_hud_since = now
-                    base_hud_variant = base_hud_detection.variant
-                base_hud_elapsed = max(0.0, now - base_hud_since)
-                restart_seconds = (
-                    BASE_HUD_YELLOW_RESTART_SECONDS
-                    if base_hud_variant == "yellow"
-                    else BASE_HUD_WHITE_RESTART_SECONDS
-                )
-                if base_hud_elapsed >= restart_seconds:
-                    variant_label = (
-                        "黄色版" if base_hud_variant == "yellow" else "白色版"
+            if critical_updated:
+                if base_hud_detection.detected and not base_watchdog_suspended:
+                    now = time.monotonic()
+                    if (
+                        base_hud_since is None
+                        or base_hud_variant != base_hud_detection.variant
+                    ):
+                        base_hud_since = now
+                        base_hud_variant = base_hud_detection.variant
+                    base_hud_elapsed = max(0.0, now - base_hud_since)
+                    restart_seconds = (
+                        BASE_HUD_YELLOW_RESTART_SECONDS
+                        if base_hud_variant == "yellow"
+                        else BASE_HUD_WHITE_RESTART_SECONDS
                     )
-                    request_macro_restart(
-                        keyboard_context,
-                        pause_state,
-                        restart_event,
-                        restart_needs_detection_event,
-                        restart_in_progress_event,
-                        reconnect_controller=False,
-                        reason=(
-                            f"基地船右下角菜单提示（{variant_label}）连续存在"
-                            f"{restart_seconds:g}秒，自动从X重开。"
-                        ),
-                    )
+                    if base_hud_elapsed >= restart_seconds:
+                        variant_label = (
+                            "黄色版"
+                            if base_hud_variant == "yellow"
+                            else "白色版"
+                        )
+                        request_macro_restart(
+                            keyboard_context,
+                            pause_state,
+                            restart_event,
+                            restart_needs_detection_event,
+                            restart_in_progress_event,
+                            reconnect_controller=False,
+                            reason=(
+                                f"基地船右下角菜单提示（{variant_label}）连续存在"
+                                f"{restart_seconds:g}秒，自动从X重开。"
+                            ),
+                        )
+                        base_hud_since = None
+                        base_hud_elapsed = 0.0
+                        base_hud_variant = None
+                else:
                     base_hud_since = None
                     base_hud_elapsed = 0.0
                     base_hud_variant = None
-            else:
-                base_hud_since = None
-                base_hud_elapsed = 0.0
-                base_hud_variant = None
             label = (
                 "BAR: BATTLE" if detection.detected else "BAR: NOT DETECTED"
             ) + (
@@ -3659,6 +3988,44 @@ def main() -> int:
                 2,
                 cv2.LINE_AA,
             )
+            press_status = (
+                "PRESS: YES"
+                if press_prompt_detection.detected
+                else "PRESS: NO"
+            ) + (
+                f"  match={press_prompt_detection.template_match:.2f}"
+                f" white={press_prompt_detection.white_fraction:.2f}"
+            )
+            if press_prompt_action_event.is_set():
+                press_status += "  HANDLING"
+            press_color = (
+                (0, 255, 0)
+                if press_prompt_detection.detected
+                else (170, 170, 170)
+            )
+            cv2.rectangle(
+                display,
+                (
+                    int(display_width * PRESS_PROMPT_ROI[0]),
+                    int(display_height * PRESS_PROMPT_ROI[2]),
+                ),
+                (
+                    int(display_width * PRESS_PROMPT_ROI[1]),
+                    int(display_height * PRESS_PROMPT_ROI[3]),
+                ),
+                press_color,
+                2,
+            )
+            cv2.putText(
+                display,
+                press_status,
+                (16, 188),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                press_color,
+                2,
+                cv2.LINE_AA,
+            )
             loot_status = (
                 "LOOT: YES" if loot_detection.detected else "LOOT: NO"
             ) + (
@@ -3728,6 +4095,8 @@ def main() -> int:
                         "收到R重开指令：已释放手柄；重新检测连接后从X开始。"
                     ),
                 )
+            if key in {ord("u"), ord("U")}:
+                send_zl_zr_combo(macro_context)
             if key in {ord("l"), ord("L")}:
                 history.print_session_summary()
             if key in {ord("h"), ord("H")}:

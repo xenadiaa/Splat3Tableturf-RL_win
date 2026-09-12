@@ -1,0 +1,8 @@
+{
+  "bind": "127.0.0.1",
+  "port": 8787,
+  "offline_after_seconds": 20,
+  "image_retention_days": 30,
+  "site_title": "满当当集章的城镇 · 梦幻章车",
+  "public_base_url": "https://stamp.rabi.date"
+}

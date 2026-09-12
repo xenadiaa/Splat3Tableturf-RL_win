@@ -1,8 +1,9 @@
 numpy==2.2.6; python_version < "3.11"
-numpy==2.4.3; python_version >= "3.11"
+numpy==2.3.5; python_version >= "3.11"
 opencv-python==4.13.0.92
 Pillow>=11,<13
 playwright>=1.58,<2
 pyserial==3.5
-rapidocr-onnxruntime>=1.4,<2; python_version < "3.13"
+paddlepaddle==3.3.0
+paddleocr==3.7.0
 torch==2.10.0

@@ -76,10 +76,11 @@ def public_days(stats: dict) -> list[dict]:
     tasks = _nested_map(stats, "daily_player_completed_tasks")
     returned = _nested_map(stats, "daily_player_returned_before_arrival")
     closed = _nested_map(stats, "daily_player_room_closed_before_arrival")
-    days = sorted(set(runs) | set(entries) | set(failures) | set(visits) | set(tasks) | set(returned) | set(closed))
+    network = _nested_map(stats, "daily_player_network_error_before_arrival")
+    days = sorted(set(runs) | set(entries) | set(failures) | set(visits) | set(tasks) | set(returned) | set(closed) | set(network))
     payloads = []
     for day in days:
-        names = sorted(set(visits.get(day, {})) | set(tasks.get(day, {})) | set(returned.get(day, {})) | set(closed.get(day, {})))
+        names = sorted(set(visits.get(day, {})) | set(tasks.get(day, {})) | set(returned.get(day, {})) | set(closed.get(day, {})) | set(network.get(day, {})))
         players = [
             {
                 "name": name,
@@ -87,6 +88,7 @@ def public_days(stats: dict) -> list[dict]:
                 "tasks": tasks.get(day, {}).get(name, 0),
                 "returned_before_arrival": returned.get(day, {}).get(name, 0),
                 "room_closed_before_arrival": closed.get(day, {}).get(name, 0),
+                "network_error_before_arrival": network.get(day, {}).get(name, 0),
             }
             for name in names
         ]
@@ -108,6 +110,7 @@ class EdgeUploader:
         self._last_live_hash = ""
         self._last_live_upload = 0.0
         self._last_screenshot_revision = -1
+        self._last_screenshot_relative = ""
         checkpoint = _load_json(SYNC_PATH, {})
         self._day_hashes = checkpoint.get("day_hashes", {}) if isinstance(checkpoint, dict) else {}
         if not isinstance(self._day_hashes, dict):
@@ -141,11 +144,15 @@ class EdgeUploader:
         revision = int(live.get("code_revision") or 0)
         relative = str(live.get("screenshot_url") or "")
         code = str(live.get("code") or "")
-        if revision == self._last_screenshot_revision:
+        if (
+            revision == self._last_screenshot_revision
+            and relative == self._last_screenshot_relative
+        ):
             return bool(relative)
         if not relative:
             self._request("/api/publish/screenshot", method="DELETE")
             self._last_screenshot_revision = revision
+            self._last_screenshot_relative = relative
             return False
         with urlopen(urljoin(self.config.local_url + "/", relative.lstrip("/")), timeout=10) as response:
             image = response.read(MAX_SCREENSHOT_BYTES + 1)
@@ -158,6 +165,7 @@ class EdgeUploader:
             headers={"X-Pokopia-Code": code, "X-Pokopia-Revision": str(revision)},
         )
         self._last_screenshot_revision = revision
+        self._last_screenshot_relative = relative
         print(f"边缘截图已更新：CODE={code or '<空>'}，revision={revision}", flush=True)
         return True
 

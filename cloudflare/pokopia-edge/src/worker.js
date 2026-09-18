@@ -1,9 +1,28 @@
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const CODE_RE = /^[0-9A-HJ-NP-Y]{6}$/;
+const COMMUNITY_CODE_RE = /^[0-9A-Z]{6}$/;
 const MAX_LIVE_BYTES = 1_000_000;
 const MAX_SCREENSHOT_BYTES = 8_000_000;
 const MAX_PLAYERS_PER_DAY = 3000;
+const MAX_COMMUNITY_BYTES = 32_000;
+const MAX_BACKUP_BYTES = 8_000_000;
+const COMMUNITY_VISIBLE_SECONDS = 12 * 60 * 60;
+const COMMUNITY_INVALID_VISIBLE_SECONDS = 30 * 60;
+const COMMUNITY_FRESH_SECONDS = 5 * 60;
+const COMMUNITY_UPLOADS_PER_DAY = 30;
+const COMMUNITY_FEEDBACKS_PER_DAY = 100;
+const COMMUNITY_ACTIVE_PER_PUBLISHER = 5;
+const COMMUNITY_ROOM_TYPES = new Set([
+  "stamp",
+  "task",
+  "flower",
+  "material_solo",
+  "other",
+]);
+const COMMUNITY_ROOM_TYPE_MAX_LENGTH = Math.max(
+  ...Array.from(COMMUNITY_ROOM_TYPES, (value) => value.length),
+);
 
 function securityHeaders(extra = {}) {
   return {
@@ -55,6 +74,65 @@ function monthNext(day) {
   const [year, month] = day.split("-").map(Number);
   const next = month === 12 ? [year + 1, 1] : [year, month + 1];
   return `${String(next[0]).padStart(4, "0")}-${String(next[1]).padStart(2, "0")}-01`;
+}
+
+function unixNow() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function cleanText(value, maxLength) {
+  return String(value || "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, maxLength);
+}
+
+async function saltedHash(env, value, purpose) {
+  const salt = String(env.UPLOAD_TOKEN || "pokopia-public-community");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${purpose}\u0000${salt}\u0000${value}`),
+  );
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function communityIdentity(request, env) {
+  const ip = request.headers.get("cf-connecting-ip") || "local";
+  const actorHash = await saltedHash(env, ip, "community-ip");
+  return {
+    actorHash,
+    // Destructive feedback corroboration is separated by hashed source IP,
+    // not by the browser-generated client id, so refreshing cannot create a
+    // second vote. The raw address is never stored.
+    reporterHash: actorHash,
+  };
+}
+
+async function ownerHash(env, token) {
+  return saltedHash(env, token, "community-owner");
+}
+
+async function communityWritesEnabled(env) {
+  const row = await env.DB.prepare(
+    "SELECT value FROM community_settings WHERE key = 'writes_enabled'",
+  ).first();
+  return !row || String(row.value).toLowerCase() !== "false";
+}
+
+function publicRoom(row) {
+  const invalidAt = clampCount(row.invalid_reported_at);
+  const fullAt = clampCount(row.full_reported_at);
+  const pendingVotes = clampCount(row.invalid_votes);
+  return {
+    id: String(row.id),
+    player_name: String(row.player_name),
+    code: String(row.code),
+    room_type: String(row.room_type),
+    description: String(row.description || ""),
+    created_at: clampCount(row.created_at),
+    full: fullAt > 0,
+    invalid: invalidAt > 0,
+    invalid_pending: !invalidAt && pendingVotes > 0,
+    expires_at: clampCount(row.created_at) + COMMUNITY_VISIBLE_SECONDS,
+    invalid_hides_at: invalidAt ? invalidAt + COMMUNITY_INVALID_VISIBLE_SECONDS : null,
+  };
 }
 
 function queryRange(url) {
@@ -214,7 +292,10 @@ async function publishLive(request, env) {
   payload.code = code;
   payload.edge_received_at_epoch = Date.now() / 1000;
   payload.offline_after_seconds = Math.max(10, clampCount(env.OFFLINE_AFTER_SECONDS || 30));
-  payload.screenshot_url = code && payload.screenshot_url ? "/media/current-code.png" : null;
+  payload.code_unknown = !code && payload.code_unknown === true;
+  payload.screenshot_url = (code || payload.code_unknown) && payload.screenshot_url
+    ? "/media/current-code.png"
+    : null;
   const stub = await liveStub(env);
   await stub.fetch("https://live.internal/state", {
     method: "PUT",
@@ -233,6 +314,7 @@ function normalizePlayer(row) {
     tasks: clampCount(row?.tasks),
     returned: clampCount(row?.returned_before_arrival),
     closed: clampCount(row?.room_closed_before_arrival),
+    network: clampCount(row?.network_error_before_arrival),
   };
 }
 
@@ -262,9 +344,9 @@ async function publishDay(request, env) {
   ]);
   for (let offset = 0; offset < normalized.length; offset += 80) {
     const statements = normalized.slice(offset, offset + 80).map((row) => env.DB.prepare(
-      `INSERT INTO player_daily(day, name, name_search, visits, tasks, returned_before_arrival, room_closed_before_arrival)
-       VALUES(?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(day, row.name, row.nameSearch, row.visits, row.tasks, row.returned, row.closed));
+      `INSERT INTO player_daily(day, name, name_search, visits, tasks, returned_before_arrival, room_closed_before_arrival, network_error_before_arrival)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(day, row.name, row.nameSearch, row.visits, row.tasks, row.returned, row.closed, row.network));
     await env.DB.batch(statements);
   }
   return json({ ok: true, date: day, players: normalized.length });
@@ -351,7 +433,7 @@ async function queryHistory(request, env, topOnly) {
     ).bind(range.start, range.end).all(),
     env.DB.prepare(
       `SELECT day, SUM(visits) successful_visits, SUM(tasks) task_participations,
-       SUM(returned_before_arrival + room_closed_before_arrival) failed_visits
+       SUM(returned_before_arrival + room_closed_before_arrival + network_error_before_arrival) failed_visits
        FROM player_daily WHERE ${condition} GROUP BY day`,
     ).bind(...args).all(),
     env.DB.prepare(
@@ -363,9 +445,10 @@ async function queryHistory(request, env, topOnly) {
        GROUP BY name HAVING count > 0 ORDER BY count DESC, name LIMIT ?`,
     ).bind(...args, requestedLimit).all(),
     env.DB.prepare(
-      `SELECT name, SUM(returned_before_arrival + room_closed_before_arrival) count,
+      `SELECT name, SUM(returned_before_arrival + room_closed_before_arrival + network_error_before_arrival) count,
        SUM(returned_before_arrival) returned_before_arrival,
-       SUM(room_closed_before_arrival) room_closed_before_arrival
+       SUM(room_closed_before_arrival) room_closed_before_arrival,
+       SUM(network_error_before_arrival) network_error_before_arrival
        FROM player_daily WHERE ${condition}
        GROUP BY name HAVING count > 0 ORDER BY count DESC, name LIMIT ?`,
     ).bind(...args, requestedLimit).all(),
@@ -403,11 +486,367 @@ async function queryHistory(request, env, topOnly) {
         ...row,
         returned_before_arrival: clampCount(row.returned_before_arrival),
         room_closed_before_arrival: clampCount(row.room_closed_before_arrival),
+        network_error_before_arrival: clampCount(row.network_error_before_arrival),
       })),
     },
     daily,
     generated_at: new Date().toISOString(),
   });
+}
+
+async function communityStatus(request, env) {
+  if (!(await rateLimit(request, env, "community-status"))) {
+    return json({ error: "请求过快，每秒最多一次。" }, 429, { "retry-after": "1" });
+  }
+  return json({
+    writes_enabled: await communityWritesEnabled(env),
+    room_lifetime_seconds: COMMUNITY_VISIBLE_SECONDS,
+    invalid_visible_seconds: COMMUNITY_INVALID_VISIBLE_SECONDS,
+  });
+}
+
+async function listCommunityRooms(request, env) {
+  if (!(await rateLimit(request, env, "community-rooms"))) {
+    return json({ error: "请求过快，每秒最多一次。" }, 429, { "retry-after": "1" });
+  }
+  const now = unixNow();
+  const [result, openRow, writesEnabled] = await Promise.all([
+    env.DB.prepare(
+    `SELECT id, player_name, code, room_type, description, created_at,
+            full_reported_at, invalid_reported_at, invalid_votes
+     FROM community_rooms
+     WHERE deleted_at IS NULL
+       AND created_at > ?
+       AND (invalid_reported_at IS NULL OR invalid_reported_at > ?)
+     ORDER BY created_at DESC
+     LIMIT 200`,
+    ).bind(now - COMMUNITY_VISIBLE_SECONDS, now - COMMUNITY_INVALID_VISIBLE_SECONDS).all(),
+    env.DB.prepare(
+      `SELECT COUNT(*) open_count
+       FROM community_rooms
+       WHERE deleted_at IS NULL
+         AND created_at > ?
+         AND full_reported_at IS NULL
+         AND invalid_reported_at IS NULL`,
+    ).bind(now - COMMUNITY_VISIBLE_SECONDS).first(),
+    communityWritesEnabled(env),
+  ]);
+  return json({
+    writes_enabled: writesEnabled,
+    open_count: clampCount(openRow?.open_count),
+    rooms: (result.results || []).map(publicRoom),
+    generated_at: new Date().toISOString(),
+  });
+}
+
+async function incrementCommunityUsage(env, day, actorHash, field) {
+  const upload = field === "uploads" ? 1 : 0;
+  const feedback = field === "feedbacks" ? 1 : 0;
+  const early = field === "early_invalid_feedbacks" ? 1 : 0;
+  return env.DB.prepare(
+    `INSERT INTO community_usage_daily(day, actor_hash, uploads, feedbacks, early_invalid_feedbacks)
+     VALUES(?, ?, ?, ?, ?)
+     ON CONFLICT(day, actor_hash) DO UPDATE SET
+       uploads = uploads + excluded.uploads,
+       feedbacks = feedbacks + excluded.feedbacks,
+       early_invalid_feedbacks = early_invalid_feedbacks + excluded.early_invalid_feedbacks`,
+  ).bind(day, actorHash, upload, feedback, early);
+}
+
+async function createCommunityRoom(request, env) {
+  if (!(await rateLimit(request, env, "community-create"))) {
+    return json({ error: "操作过快，请一秒后再试。" }, 429, { "retry-after": "1" });
+  }
+  if (!(await communityWritesEnabled(env))) return json({ error: "管理员已暂时关闭玩家开门信息提交。" }, 423);
+  let payload;
+  try {
+    payload = await readJsonLimited(request, MAX_COMMUNITY_BYTES);
+  } catch (error) {
+    return json({ error: String(error.message || error) }, 400);
+  }
+  const playerName = cleanText(payload?.player_name, 40);
+  const code = cleanText(payload?.code, 6).toUpperCase();
+  const roomType = cleanText(
+    payload?.room_type,
+    COMMUNITY_ROOM_TYPE_MAX_LENGTH,
+  ) || "stamp";
+  const description = cleanText(payload?.description, 240);
+  const ownerToken = cleanText(payload?.owner_token, 160);
+  if (!playerName || Array.from(playerName).length > 20) return json({ error: "玩家名称应为1至20个字符。" }, 400);
+  if (!COMMUNITY_CODE_RE.test(code)) return json({ error: "开门码必须正好是6位数字或英文字母。" }, 400);
+  if (!COMMUNITY_ROOM_TYPES.has(roomType)) return json({ error: "开门类型无效。" }, 400);
+  if (ownerToken.length < 24) return json({ error: "本地删除凭证无效，请刷新页面后重试。" }, 400);
+  const now = unixNow();
+  const day = beijingBusinessDay();
+  const identity = await communityIdentity(request, env);
+  const usage = await env.DB.prepare(
+    "SELECT uploads FROM community_usage_daily WHERE day = ? AND actor_hash = ?",
+  ).bind(day, identity.actorHash).first();
+  if (clampCount(usage?.uploads) >= COMMUNITY_UPLOADS_PER_DAY) {
+    return json({ error: `同一网络每天最多提交${COMMUNITY_UPLOADS_PER_DAY}辆车。` }, 429);
+  }
+  const recent = await env.DB.prepare(
+    "SELECT MAX(created_at) last_at, SUM(CASE WHEN deleted_at IS NULL AND created_at > ? THEN 1 ELSE 0 END) active_count FROM community_rooms WHERE publisher_hash = ?",
+  ).bind(now - COMMUNITY_VISIBLE_SECONDS, identity.actorHash).first();
+  if (clampCount(recent?.active_count) >= COMMUNITY_ACTIVE_PER_PUBLISHER) {
+    return json({ error: `同一网络最多同时保留${COMMUNITY_ACTIVE_PER_PUBLISHER}辆有效车。` }, 429);
+  }
+  if (now - clampCount(recent?.last_at) < 15) return json({ error: "两次提交至少间隔15秒。" }, 429);
+  const duplicate = await env.DB.prepare(
+    "SELECT id FROM community_rooms WHERE code = ? AND deleted_at IS NULL AND created_at > ? LIMIT 1",
+  ).bind(code, now - COMMUNITY_VISIBLE_SECONDS).first();
+  if (duplicate) return json({ error: "这个开门码仍在列表中，请勿重复提交。" }, 409);
+  const id = crypto.randomUUID();
+  const hashedOwner = await ownerHash(env, ownerToken);
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO community_rooms(
+        id, owner_hash, publisher_hash, player_name, player_search, code,
+        room_type, description, business_day, created_at
+      ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      id, hashedOwner, identity.actorHash, playerName,
+      playerName.toLocaleLowerCase("und"), code, roomType, description, day, now,
+    ),
+    await incrementCommunityUsage(env, day, identity.actorHash, "uploads"),
+  ]);
+  return json({ ok: true, room: publicRoom({
+    id, player_name: playerName, code, room_type: roomType, description,
+    created_at: now, full_reported_at: null, invalid_reported_at: null, invalid_votes: 0,
+  }) }, 201);
+}
+
+function communityRoomId(pathname, suffix = "") {
+  const escaped = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = pathname.match(new RegExp(`^/api/community/rooms/([0-9a-f-]{36})${escaped}$`, "i"));
+  return match ? match[1] : "";
+}
+
+async function feedbackCommunityRoom(request, env, roomId) {
+  if (!(await rateLimit(request, env, "community-feedback"))) {
+    return json({ error: "操作过快，请一秒后再试。" }, 429, { "retry-after": "1" });
+  }
+  if (!(await communityWritesEnabled(env))) return json({ error: "管理员已暂时关闭反馈功能。" }, 423);
+  let payload;
+  try {
+    payload = await readJsonLimited(request, MAX_COMMUNITY_BYTES);
+  } catch (error) {
+    return json({ error: String(error.message || error) }, 400);
+  }
+  const action = cleanText(payload?.action, 20);
+  if (!["full", "full_wrong", "invalid", "invalid_wrong"].includes(action)) {
+    return json({ error: "反馈类型无效。" }, 400);
+  }
+  const now = unixNow();
+  const room = await env.DB.prepare(
+    "SELECT * FROM community_rooms WHERE id = ? AND deleted_at IS NULL AND created_at > ?",
+  ).bind(roomId, now - COMMUNITY_VISIBLE_SECONDS).first();
+  if (!room) return json({ error: "该开门信息不存在或已经过期。" }, 404);
+  if (["full", "full_wrong"].includes(action) && room.room_type !== "stamp") {
+    return json({ error: "只有梦幻章车可以反馈已满。" }, 400);
+  }
+  const identity = await communityIdentity(request, env);
+  const day = beijingBusinessDay();
+  const usage = await env.DB.prepare(
+    "SELECT feedbacks FROM community_usage_daily WHERE day = ? AND actor_hash = ?",
+  ).bind(day, identity.actorHash).first();
+  if (clampCount(usage?.feedbacks) >= COMMUNITY_FEEDBACKS_PER_DAY) {
+    return json({ error: `同一网络每天最多反馈${COMMUNITY_FEEDBACKS_PER_DAY}次。` }, 429);
+  }
+  const recentDuplicate = await env.DB.prepare(
+    "SELECT id FROM community_feedback WHERE room_id = ? AND reporter_hash = ? AND action = ? AND created_at > ? LIMIT 1",
+  ).bind(roomId, identity.reporterHash, action, now - 10 * 60).first();
+  if (recentDuplicate) return json({ error: "相同反馈已经记录，请勿重复点击。" }, 409);
+  const roomAge = Math.max(0, now - clampCount(room.created_at));
+  let update;
+  let message = "反馈已记录。";
+  if (action === "full") {
+    update = env.DB.prepare(
+      "UPDATE community_rooms SET full_reported_at = COALESCE(full_reported_at, ?) WHERE id = ?",
+    ).bind(now, roomId);
+    message = "已标记为已满。";
+  } else if (action === "full_wrong") {
+    update = env.DB.prepare("UPDATE community_rooms SET full_reported_at = NULL WHERE id = ?").bind(roomId);
+    message = "已恢复已满状态。";
+  } else if (action === "invalid_wrong") {
+    update = env.DB.prepare(
+      "UPDATE community_rooms SET invalid_reported_at = NULL, invalid_votes = 0 WHERE id = ?",
+    ).bind(roomId);
+    message = "已恢复为有效信息。";
+  } else if (room.invalid_reported_at) {
+    return json({ error: "该信息已经被标记失效。" }, 409);
+  } else if (roomAge < COMMUNITY_FRESH_SECONDS) {
+    update = env.DB.prepare(
+      `UPDATE community_rooms SET
+        invalid_reported_at = CASE WHEN invalid_votes >= 1 THEN ? ELSE NULL END,
+        invalid_votes = CASE WHEN invalid_votes >= 1 THEN 0 ELSE invalid_votes + 1 END
+       WHERE id = ?`,
+    ).bind(now, roomId);
+    message = clampCount(room.invalid_votes) >= 1
+      ? "已由两名访问者确认失效，30分钟后自动隐藏。"
+      : "新开车辆需要另一名访问者确认失效，当前已进入待核验。";
+  } else {
+    update = env.DB.prepare(
+      "UPDATE community_rooms SET invalid_reported_at = ?, invalid_votes = 0 WHERE id = ?",
+    ).bind(now, roomId);
+    message = "已标记失效，30分钟后自动隐藏。";
+  }
+  const statements = [
+    update,
+    env.DB.prepare(
+      "INSERT INTO community_feedback(room_id, reporter_hash, action, created_at, room_age_seconds) VALUES(?, ?, ?, ?, ?)",
+    ).bind(roomId, identity.reporterHash, action, now, roomAge),
+    await incrementCommunityUsage(env, day, identity.actorHash, "feedbacks"),
+  ];
+  if (action === "invalid" && roomAge < COMMUNITY_FRESH_SECONDS) {
+    statements.push(await incrementCommunityUsage(env, day, identity.actorHash, "early_invalid_feedbacks"));
+  }
+  await env.DB.batch(statements);
+  return json({ ok: true, message });
+}
+
+async function deleteCommunityRoom(request, env, roomId) {
+  if (!(await rateLimit(request, env, "community-delete"))) {
+    return json({ error: "操作过快，请一秒后再试。" }, 429, { "retry-after": "1" });
+  }
+  let payload;
+  try {
+    payload = await readJsonLimited(request, MAX_COMMUNITY_BYTES);
+  } catch (error) {
+    return json({ error: String(error.message || error) }, 400);
+  }
+  const token = cleanText(payload?.owner_token, 160);
+  if (token.length < 24) return json({ error: "没有这条信息的本地删除凭证。" }, 403);
+  const hashedOwner = await ownerHash(env, token);
+  const result = await env.DB.prepare(
+    "UPDATE community_rooms SET deleted_at = ?, delete_reason = 'owner_correction' WHERE id = ? AND owner_hash = ? AND deleted_at IS NULL",
+  ).bind(unixNow(), roomId, hashedOwner).run();
+  if (!result.meta?.changes) return json({ error: "删除凭证不匹配，只有原发布浏览器可以删除。" }, 403);
+  return json({ ok: true, deleted: true });
+}
+
+async function communityLeaderboard(request, env) {
+  if (!(await rateLimit(request, env, "community-leaderboard"))) {
+    return json({ error: "请求过快，每秒最多一次。" }, 429, { "retry-after": "1" });
+  }
+  const url = new URL(request.url);
+  let range;
+  try {
+    range = queryRange(url);
+  } catch (error) {
+    return json({ error: String(error.message || error) }, 400);
+  }
+  const playerQuery = cleanText(url.searchParams.get("player"), 40);
+  const playerFilter = playerQuery ? `%${playerQuery.toLocaleLowerCase("und")}%` : "%";
+  const result = await env.DB.prepare(
+    `SELECT player_name name, COUNT(*) count,
+            SUM(CASE WHEN room_type = 'stamp' THEN 1 ELSE 0 END) stamp_count,
+            SUM(CASE WHEN room_type = 'task' THEN 1 ELSE 0 END) task_count,
+            SUM(CASE WHEN room_type = 'flower' THEN 1 ELSE 0 END) flower_count,
+            SUM(CASE WHEN room_type = 'material_solo' THEN 1 ELSE 0 END) material_solo_count,
+            SUM(CASE WHEN room_type = 'other' THEN 1 ELSE 0 END) other_count
+     FROM community_rooms
+     WHERE deleted_at IS NULL AND business_day BETWEEN ? AND ?
+       AND player_search LIKE ?
+     GROUP BY player_name
+     ORDER BY count DESC, player_name
+     LIMIT 100`,
+  ).bind(range.start, range.end, playerFilter).all();
+  return json({
+    period: range.label,
+    start: range.start === "0000-01-01" ? null : range.start,
+    end_inclusive: range.end === "9999-12-31" ? null : range.end,
+    player_query: playerQuery,
+    rankings: (result.results || []).map((row, index) => ({
+      rank: index + 1,
+      name: String(row.name),
+      count: clampCount(row.count),
+      by_type: {
+        stamp: clampCount(row.stamp_count), task: clampCount(row.task_count),
+        flower: clampCount(row.flower_count), material_solo: clampCount(row.material_solo_count),
+        other: clampCount(row.other_count),
+      },
+    })),
+  });
+}
+
+async function exportCommunityData(request, env) {
+  if (!(await authorized(request, env))) return json({ error: "未授权" }, 401);
+  const [rooms, feedback, usage, settings] = await Promise.all([
+    env.DB.prepare("SELECT * FROM community_rooms ORDER BY created_at, id").all(),
+    env.DB.prepare("SELECT * FROM community_feedback ORDER BY id").all(),
+    env.DB.prepare("SELECT * FROM community_usage_daily ORDER BY day, actor_hash").all(),
+    env.DB.prepare("SELECT * FROM community_settings ORDER BY key").all(),
+  ]);
+  return json({
+    schema: "pokopia-community-backup-v1",
+    exported_at: new Date().toISOString(),
+    rooms: rooms.results || [],
+    feedback: feedback.results || [],
+    usage: usage.results || [],
+    settings: settings.results || [],
+  });
+}
+
+async function importCommunityData(request, env) {
+  if (!(await authorized(request, env))) return json({ error: "未授权" }, 401);
+  let payload;
+  try {
+    payload = await readJsonLimited(request, MAX_BACKUP_BYTES);
+  } catch (error) {
+    return json({ error: String(error.message || error) }, 400);
+  }
+  if (payload?.schema !== "pokopia-community-backup-v1") return json({ error: "备份格式不匹配。" }, 400);
+  const rooms = Array.isArray(payload.rooms) ? payload.rooms.slice(0, 20_000) : [];
+  const feedback = Array.isArray(payload.feedback) ? payload.feedback.slice(0, 100_000) : [];
+  const usage = Array.isArray(payload.usage) ? payload.usage.slice(0, 50_000) : [];
+  const statements = [];
+  for (const row of rooms) {
+    if (!row?.id || !row?.owner_hash || !COMMUNITY_CODE_RE.test(String(row.code || ""))) continue;
+    statements.push(env.DB.prepare(
+      `INSERT OR REPLACE INTO community_rooms(
+        id, owner_hash, publisher_hash, player_name, player_search, code, room_type,
+        description, business_day, created_at, full_reported_at, invalid_reported_at,
+        invalid_votes, deleted_at, delete_reason
+      ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      row.id, row.owner_hash, row.publisher_hash, row.player_name, row.player_search,
+      row.code, row.room_type, row.description || "", row.business_day, clampCount(row.created_at),
+      row.full_reported_at || null, row.invalid_reported_at || null, clampCount(row.invalid_votes),
+      row.deleted_at || null, row.delete_reason || null,
+    ));
+  }
+  for (const row of feedback) {
+    statements.push(env.DB.prepare(
+      "INSERT OR REPLACE INTO community_feedback(id, room_id, reporter_hash, action, created_at, room_age_seconds) VALUES(?, ?, ?, ?, ?, ?)",
+    ).bind(row.id, row.room_id, row.reporter_hash, row.action, clampCount(row.created_at), clampCount(row.room_age_seconds)));
+  }
+  for (const row of usage) {
+    statements.push(env.DB.prepare(
+      "INSERT OR REPLACE INTO community_usage_daily(day, actor_hash, uploads, feedbacks, early_invalid_feedbacks) VALUES(?, ?, ?, ?, ?)",
+    ).bind(row.day, row.actor_hash, clampCount(row.uploads), clampCount(row.feedbacks), clampCount(row.early_invalid_feedbacks)));
+  }
+  for (let offset = 0; offset < statements.length; offset += 80) {
+    await env.DB.batch(statements.slice(offset, offset + 80));
+  }
+  return json({ ok: true, rooms: rooms.length, feedback: feedback.length, usage: usage.length });
+}
+
+async function toggleCommunityWrites(request, env) {
+  if (!(await authorized(request, env))) return json({ error: "未授权" }, 401);
+  let payload = {};
+  try {
+    payload = await readJsonLimited(request, MAX_COMMUNITY_BYTES);
+  } catch (error) {
+    return json({ error: String(error.message || error) }, 400);
+  }
+  const current = await communityWritesEnabled(env);
+  const enabled = typeof payload.enabled === "boolean" ? payload.enabled : !current;
+  await env.DB.prepare(
+    `INSERT INTO community_settings(key, value, updated_at) VALUES('writes_enabled', ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  ).bind(enabled ? "true" : "false", unixNow()).run();
+  return json({ ok: true, writes_enabled: enabled });
 }
 
 export default {
@@ -419,11 +858,26 @@ export default {
     if (request.method === "POST" && url.pathname === "/api/publish/live") return publishLive(request, env);
     if (request.method === "POST" && url.pathname === "/api/publish/day") return publishDay(request, env);
     if (["POST", "DELETE"].includes(request.method) && url.pathname === "/api/publish/screenshot") return publishScreenshot(request, env);
+    if (request.method === "POST" && url.pathname === "/api/community/rooms") return createCommunityRoom(request, env);
+    if (request.method === "POST") {
+      const feedbackRoomId = communityRoomId(url.pathname, "/feedback");
+      if (feedbackRoomId) return feedbackCommunityRoom(request, env, feedbackRoomId);
+    }
+    if (request.method === "DELETE") {
+      const deleteRoomId = communityRoomId(url.pathname);
+      if (deleteRoomId) return deleteCommunityRoom(request, env, deleteRoomId);
+    }
+    if (request.method === "POST" && url.pathname === "/api/admin/community/toggle") return toggleCommunityWrites(request, env);
+    if (request.method === "POST" && url.pathname === "/api/admin/community/import") return importCommunityData(request, env);
     if (request.method !== "GET" && request.method !== "HEAD") return json({ error: "Method not allowed" }, 405);
     if (url.pathname === "/api/stream") return streamLive(request, env);
     if (url.pathname === "/api/live") return getLive(request, env, ctx);
     if (url.pathname === "/api/query") return queryHistory(request, env, false);
     if (url.pathname === "/api/rankings") return queryHistory(request, env, true);
+    if (url.pathname === "/api/community/status") return communityStatus(request, env);
+    if (url.pathname === "/api/community/rooms") return listCommunityRooms(request, env);
+    if (url.pathname === "/api/community/leaderboard") return communityLeaderboard(request, env);
+    if (url.pathname === "/api/admin/community/export") return exportCommunityData(request, env);
     if (url.pathname === "/media/current-code.png") return getCurrentScreenshot(env);
     if (url.pathname === "/health") return json({ ok: true, service: "pokopia-stamp-edge" });
     const response = await env.ASSETS.fetch(request);

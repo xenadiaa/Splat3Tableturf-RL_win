@@ -49,6 +49,7 @@ def input_code_to_chrome(
     *,
     expanded_text: str | None = None,
     send: bool = True,
+    allow_unknown: bool = False,
 ) -> ChromeCodeInputResult:
     """Fill expanded CODE text and optionally press Enter to send it.
 
@@ -60,7 +61,9 @@ def input_code_to_chrome(
     - ``MACRO6_CHROME_TEXT_TEMPLATE`` (default ``{code}``)
     """
     normalized_code = str(code or "").strip().upper()
-    if not _CODE_PATTERN.fullmatch(normalized_code):
+    if not _CODE_PATTERN.fullmatch(normalized_code) and not (
+        allow_unknown and normalized_code == "未知"
+    ):
         raise ValueError("Chrome 输入接口只接受六位数字或大写字母 CODE。")
 
     text = (

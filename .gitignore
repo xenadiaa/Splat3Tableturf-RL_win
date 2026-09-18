@@ -47,6 +47,7 @@
 /cloudflare/pokopia-edge/wrangler.jsonc
 /cloudflare/pokopia-edge/.dev.vars
 /pokopia_cloudflare_deploy_error.log
+/pokopia_community_backups/
 autocontroller_rebuild_for_RL/pokopia_watchdog_templates/POKOPIA_00_SAVE_FIN.png
 autocontroller_rebuild_for_RL/pokopia_watchdog_templates/POKOPIA_03_ABLE_TO_ACCESS.png
 autocontroller_rebuild_for_RL/pokopia_watchdog_templates/POKOPIA_04_CONNECT_ON.png

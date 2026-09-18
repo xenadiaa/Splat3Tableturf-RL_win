@@ -14,6 +14,8 @@ import re
 import threading
 import time
 from urllib.parse import parse_qs, unquote, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 if __package__:
     from .pokopia_archive_cleanup import cleanup_archives
@@ -35,7 +37,7 @@ DEFAULT_CONFIG = {
     "offline_after_seconds": 20,
     "image_retention_days": 30,
     "site_title": "满当当集章的城镇 · 梦幻章车",
-    "public_base_url": "",
+    "public_base_url": "https://stamp.rabi.date",
 }
 
 
@@ -201,13 +203,27 @@ class DashboardData:
         tasks_daily = _nested(stats, "daily_player_completed_tasks")
         returned_daily = _nested(stats, "daily_player_returned_before_arrival")
         closed_daily = _nested(stats, "daily_player_room_closed_before_arrival")
+        network_daily = _nested(
+            stats,
+            "daily_player_network_error_before_arrival",
+        )
         visits, visits_by_day = _sum_nested(visits_daily, start, end, needle)
         tasks, tasks_by_day = _sum_nested(tasks_daily, start, end, needle)
         returned, returned_by_day = _sum_nested(returned_daily, start, end, needle)
         closed, closed_by_day = _sum_nested(closed_daily, start, end, needle)
+        network, network_by_day = _sum_nested(
+            network_daily,
+            start,
+            end,
+            needle,
+        )
         failures = {
-            name: returned.get(name, 0) + closed.get(name, 0)
-            for name in set(returned) | set(closed)
+            name: (
+                returned.get(name, 0)
+                + closed.get(name, 0)
+                + network.get(name, 0)
+            )
+            for name in set(returned) | set(closed) | set(network)
         }
 
         runs = _counter(stats, "daily_runs")
@@ -223,6 +239,7 @@ class DashboardData:
                 | set(tasks_by_day)
                 | set(returned_by_day)
                 | set(closed_by_day)
+                | set(network_by_day)
             )
             if _day_in_range(day, start, end)
         )
@@ -230,7 +247,9 @@ class DashboardData:
         for day in known_days:
             success = visits_by_day.get(day, 0) if needle else aggregate_success.get(day, 0)
             failed = (
-                returned_by_day.get(day, 0) + closed_by_day.get(day, 0)
+                returned_by_day.get(day, 0)
+                + closed_by_day.get(day, 0)
+                + network_by_day.get(day, 0)
                 if needle
                 else aggregate_failure.get(day, 0)
             )
@@ -246,7 +265,7 @@ class DashboardData:
         matched_names = sorted(
             {
                 name
-                for source in (visits, tasks, returned, closed)
+                for source in (visits, tasks, returned, closed, network)
                 for name in source
             },
             key=lambda item: (item.casefold(), item),
@@ -270,6 +289,10 @@ class DashboardData:
                         **row,
                         "returned_before_arrival": returned.get(str(row["name"]), 0),
                         "room_closed_before_arrival": closed.get(str(row["name"]), 0),
+                        "network_error_before_arrival": network.get(
+                            str(row["name"]),
+                            0,
+                        ),
                     }
                     for row in _ranking(failures, limit)
                 ],
@@ -319,35 +342,61 @@ class DashboardData:
                 return value
         return value[:23]
 
-    def _latest_code_screenshot_path(self, code: str) -> Path | None:
-        if not code or not ARCHIVE_ROOT.is_dir():
+    def _latest_code_screenshot_path(
+        self,
+        code: str,
+        *,
+        code_unknown: bool = False,
+        revision: int = 0,
+    ) -> Path | None:
+        if (not code and not code_unknown) or not ARCHIVE_ROOT.is_dir():
             return None
-        safe_code = re.sub(r"[^0-9A-Za-z_-]+", "_", code.strip())
+        safe_code = (
+            "__UNKNOWN__"
+            if code_unknown
+            else re.sub(r"[^0-9A-Za-z_-]+", "_", code.strip())
+        )
+        cache_key = f"{safe_code}:{max(0, int(revision))}"
         cached = self._screenshot_cache_path
         if (
-            safe_code == self._screenshot_cache_code
+            cache_key == self._screenshot_cache_code
             and cached is not None
             and cached.is_file()
         ):
             return cached
 
         current_folder = ARCHIVE_ROOT / f"STAMP_{_business_day().isoformat()}"
-        candidates = list(current_folder.glob(f"STAMP_*_{safe_code}.png"))
+        if code_unknown:
+            pattern = "ERROR_*_code_ocr_ten_failures_unknown.png"
+            candidates = list(current_folder.glob(pattern))
+        else:
+            candidates = list(current_folder.glob(f"STAMP_*_{safe_code}.png"))
+            if not candidates:
+                candidates = list(
+                    ARCHIVE_ROOT.glob(f"STAMP_*/STAMP_*_{safe_code}.png")
+                )
         if not candidates:
-            candidates = list(ARCHIVE_ROOT.glob(f"STAMP_*/STAMP_*_{safe_code}.png"))
-        if not candidates:
-            self._screenshot_cache_code = safe_code
+            self._screenshot_cache_code = cache_key
             self._screenshot_cache_path = None
             return None
         latest = max(candidates, key=lambda item: item.stat().st_mtime)
-        self._screenshot_cache_code = safe_code
+        self._screenshot_cache_code = cache_key
         self._screenshot_cache_path = latest
         return latest
 
     def current_code_screenshot(self) -> Path | None:
         state = _load_json(STATE_PATH, {})
         code = str(state.get("code", "")) if isinstance(state, dict) else ""
-        return self._latest_code_screenshot_path(code)
+        code_unknown = (
+            bool(state.get("code_unknown"))
+            if isinstance(state, dict)
+            else False
+        )
+        return self._latest_code_screenshot_path(
+            code,
+            code_unknown=code_unknown,
+            revision=_safe_int(state.get("code_revision")),
+        )
 
     def live(self) -> dict[str, object]:
         now_monotonic = time.monotonic()
@@ -369,7 +418,11 @@ class DashboardData:
             }
         state["stale_seconds"] = stale_seconds
         state["offline_after_seconds"] = offline_after
-        screenshot = self._latest_code_screenshot_path(str(state.get("code", "")))
+        screenshot = self._latest_code_screenshot_path(
+            str(state.get("code", "")),
+            code_unknown=bool(state.get("code_unknown")),
+            revision=_safe_int(state.get("code_revision")),
+        )
         state["screenshot_url"] = (
             f"/media/current-code.png?v={screenshot.stat().st_mtime_ns}"
             if screenshot
@@ -422,6 +475,12 @@ class DashboardData:
                 "successful": _safe_int(record.get("round_player_entries")),
                 "failed": _safe_int(record.get("round_player_entry_failures")),
                 "players": record.get("players", []),
+                "reopen_reason": str(record.get("reopen_reason") or "normal_reopen"),
+                "network_connection_error": (
+                    record.get("network_connection_error", {})
+                    if isinstance(record.get("network_connection_error"), dict)
+                    else {}
+                ),
             }
             for record in summaries
             if record.get("status") == "room_reopen_summary"
@@ -480,6 +539,58 @@ class PokopiaHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _proxy_community_request(self, method: str) -> None:
+        """Let localhost preview use the always-on Cloudflare community API."""
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/api/community/"):
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        base_url = str(
+            self.dashboard.config.get("public_base_url")
+            or "https://stamp.rabi.date"
+        ).rstrip("/")
+        body = None
+        if method in {"POST", "DELETE"}:
+            declared = min(
+                32_000,
+                max(0, _safe_int(self.headers.get("Content-Length"))),
+            )
+            body = self.rfile.read(declared)
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Pokopia-Client": self.headers.get(
+                "X-Pokopia-Client",
+                "localhost-preview",
+            ),
+        }
+        request = Request(
+            base_url + parsed.path + (f"?{parsed.query}" if parsed.query else ""),
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urlopen(request, timeout=15) as response:
+                payload = response.read()
+                status = response.status
+        except HTTPError as exc:
+            payload = exc.read()
+            status = exc.code
+        except URLError as exc:
+            self._send_json(
+                {"error": f"Cloudflare社区接口连接失败：{exc.reason}"},
+                HTTPStatus.BAD_GATEWAY,
+            )
+            return
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self._security_headers()
+        self.end_headers()
+        self.wfile.write(payload)
+
     @staticmethod
     def _safe_child(root: Path, raw_relative: str) -> Path | None:
         relative = Path(unquote(raw_relative.replace("\\", "/")))
@@ -495,6 +606,9 @@ class PokopiaHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path.startswith("/api/community/"):
+                self._proxy_community_request("GET")
+                return
             if parsed.path == "/api/live":
                 self._send_json(self.dashboard.live())
                 return
@@ -523,6 +637,12 @@ class PokopiaHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             self._send_json({"error": f"服务器读取数据失败：{exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def do_POST(self) -> None:
+        self._proxy_community_request("POST")
+
+    def do_DELETE(self) -> None:
+        self._proxy_community_request("DELETE")
 
 
 def parse_args() -> argparse.Namespace:
@@ -568,7 +688,10 @@ def main() -> int:
         daemon=True,
     ).start()
     shown_host = "127.0.0.1" if bind in {"0.0.0.0", "::"} else bind
-    print("Pokopia 实时网页服务已启动（公开端只读，无写入API）。")
+    print(
+        "Pokopia 实时网页服务已启动（Macro6状态只读；"
+        "玩家开门功能由Cloudflare边缘独立处理）。"
+    )
     print(f"本机访问：http://{shown_host}:{port}/")
     print(f"监听地址：{bind}:{port}")
     print("按 Ctrl+C 停止网页服务。")

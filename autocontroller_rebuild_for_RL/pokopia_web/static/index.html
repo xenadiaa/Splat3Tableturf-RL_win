@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#102f3d">
   <meta name="description" content="满当当集章的城镇梦幻章车实时状态、房间动态与历史服务统计。">
   <title>梦幻章车 · 实时状态</title>
-  <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=1.51">
+  <script src="/app.js?v=1.51" defer></script>
 </head>
 <body>
   <div class="ambient ambient-a"></div>
@@ -19,8 +19,12 @@
     </a>
     <div class="top-actions">
       <span id="last-updated" class="last-updated">正在连接…</span>
+      <button class="soft-button" id="welfare-button" type="button">福利</button>
+      <button class="soft-button community-menu-button" id="community-button" type="button">
+        玩家开门<span id="community-open-count" class="menu-count-badge" aria-label="当前开放车辆数" hidden>0</span>
+      </button>
+      <button class="soft-button" id="good-button" type="button">好人榜</button>
       <button class="soft-button" id="rank-button" type="button">排行榜</button>
-      <button class="soft-button" id="query-button" type="button">数据查询</button>
     </div>
   </header>
 
@@ -135,15 +139,19 @@
       <button id="drawer-close" class="icon-button" type="button" aria-label="关闭侧栏">×</button>
     </div>
 
+    <div id="ranking-navigation" class="segmented ranking-navigation" role="group" aria-label="排行榜子页面" hidden>
+      <button data-ranking-view="all" class="active">总计</button>
+      <button data-ranking-view="day">日</button>
+      <button data-ranking-view="week">周</button>
+      <button data-ranking-view="month">月</button>
+      <button data-ranking-view="year">年</button>
+      <button data-ranking-view="query">精准查询</button>
+    </div>
+
     <section id="ranking-pane" class="drawer-pane" hidden>
-      <div class="segmented" role="group" aria-label="排行榜周期">
-        <button data-period="day">日</button><button data-period="week">周</button>
-        <button data-period="month">月</button><button data-period="year">年</button>
-        <button data-period="all" class="active">总计</button>
-      </div>
       <p class="range-caption" id="ranking-range">全部业务日期 · 前10名</p>
-      <div class="ranking-group"><h3>来访成功次数</h3><ol id="visit-ranking" class="ranking-list"></ol></div>
       <div class="ranking-group"><h3>参与完成任务数</h3><ol id="task-ranking" class="ranking-list"></ol></div>
+      <div class="ranking-group"><h3>来访成功次数</h3><ol id="visit-ranking" class="ranking-list"></ol></div>
       <div class="ranking-group"><h3>进入失败次数</h3><ol id="failure-ranking" class="ranking-list"></ol></div>
     </section>
 
@@ -167,13 +175,86 @@
         <thead><tr><th>业务日期</th><th>轮次</th><th>成功</th><th>失败</th><th>任务参与</th></tr></thead>
         <tbody id="daily-table"></tbody><tfoot id="daily-total"></tfoot>
       </table></div>
-      <div class="ranking-group"><h3>来访成功排名</h3><ol id="query-visits" class="ranking-list"></ol></div>
       <div class="ranking-group"><h3>任务完成排名</h3><ol id="query-tasks" class="ranking-list"></ol></div>
+      <div class="ranking-group"><h3>来访成功排名</h3><ol id="query-visits" class="ranking-list"></ol></div>
       <div class="ranking-group"><h3>失败次数排名</h3><ol id="query-failures" class="ranking-list"></ol></div>
+    </section>
+
+    <section id="welfare-pane" class="drawer-pane" hidden>
+      <article class="guide-intro">
+        <h3>好友宝可梦动作</h3>
+        <p>从箱子中自取甜甜蜜召唤三间屋子里未出现的宝可梦，邀请没有对应动作的宝可梦去自己岛上。</p>
+        <img src="/好友宝可梦位置.png" alt="好友宝可梦与甜甜蜜箱子位置" loading="lazy">
+        <p class="guide-followup">宝可梦动作对照表如图所示。</p>
+        <img src="/好友宝可梦动作对照.png" alt="好友宝可梦动作对照表" loading="lazy">
+      </article>
+      <article class="guide-intro task-guide-head">
+        <h3>任务与生活币</h3>
+        <p>快速获取生活币可以做任务。请规划好时间，到点机器人会自动关门。</p>
+      </article>
+      <div class="table-wrap guide-table-wrap"><table class="guide-table">
+        <colgroup><col class="task-kind-column"><col></colgroup>
+        <thead><tr><th>任务种类</th><th>完成方式</th></tr></thead>
+        <tbody>
+          <tr><th>烟花</th><td><p>前往海边，箱子里烟花自取，手动放置入炮筒里手动发射。</p><img src="/烟花燃放点.png" alt="烟花燃放点" loading="lazy"></td></tr>
+          <tr><th>染色</th><td><p>前往图图犬住处。</p><img src="/图图犬住处.png" alt="图图犬住处" loading="lazy"><p class="guide-followup">取出10个可染色墙、2个染料与1个甜甜蜜；用甜甜蜜呼唤图图犬老师，对10个墙批量操作，一次性全染色。</p><img src="/图图犬材料.png" alt="图图犬染色所需材料" loading="lazy"></td></tr>
+          <tr><th>获取物品</th><td><p>前往储藏箱，寻找羽毛、甜甜蜜、叶子、藤蔓绳、玻璃、金属条、混凝土、纸等所需物品；放置到物品框，砍下来吸取。</p><div class="guide-image-pair"><img src="/材料箱位置.png" alt="材料箱位置" loading="lazy"><img src="/展示框位置.png" alt="展示框位置" loading="lazy"></div></td></tr>
+          <tr><th>料理</th><td><p>前往灶台，从旁边箱子取任意食材后制作。</p><img src="/做饭位置.png" alt="做饭位置" loading="lazy"></td></tr>
+          <tr><th>送礼</th><td>前往储藏箱取任意物品，赠送岛上宝可梦。</td></tr>
+          <tr><th>寻找水面亮闪闪</th><td><p>前往岛屿标记处寻找；第一处没有时，前往第二处寻找。</p><img src="/亮闪闪位置.png" alt="亮闪闪位置" loading="lazy"></td></tr>
+          <tr><th>拍照</th><td>自行完成。</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="community-pane" class="drawer-pane" hidden>
+      <p class="range-caption">每辆车信息最多保留12小时；被确认失效后保留30分钟再自动隐藏，云端无需定时物理删除。</p>
+      <div id="community-write-state" class="community-write-state">正在读取操作状态…</div>
+      <div id="community-rooms" class="community-rooms"><div class="empty-state">正在读取其它玩家开门信息…</div></div>
+      <form id="community-form" class="query-form community-form">
+        <h3>发布我的开门信息</h3>
+        <label>玩家名称<input id="community-player" maxlength="20" required autocomplete="nickname" placeholder="只需首次填写，之后保存在本浏览器"></label>
+        <label>开门码<input id="community-code" minlength="6" maxlength="6" pattern="[A-Za-z0-9]{6}" required autocomplete="off" autocapitalize="characters" inputmode="text" placeholder="必填：6位数字或字母"></label>
+        <label>我要开<select id="community-type">
+          <option value="stamp" selected>梦幻章</option><option value="task">任务车</option>
+          <option value="flower">花车</option><option value="material_solo">材料单车</option><option value="other">其它</option>
+        </select></label>
+        <label>描述<textarea id="community-description" maxlength="240" rows="4" placeholder="例如：大家随意来，开半小时"></textarea></label>
+        <button id="community-submit" class="primary-button" type="submit">发布开门信息</button>
+      </form>
+    </section>
+
+    <section id="good-pane" class="drawer-pane" hidden>
+      <div class="segmented good-navigation" role="group" aria-label="好人榜子页面">
+        <button data-good-view="all" class="active">总计</button><button data-good-view="day">日</button>
+        <button data-good-view="week">周</button><button data-good-view="month">月</button>
+        <button data-good-view="year">年</button><button data-good-view="query">精准查询</button>
+      </div>
+      <div id="good-ranking-pane">
+        <p class="range-caption" id="good-range">只统计玩家在本网站发布且未自行删除的开门信息。</p>
+        <div class="ranking-group"><h3>玩家开门次数</h3><ol id="good-ranking" class="ranking-list"></ol></div>
+      </div>
+      <div id="good-query-pane" hidden>
+        <form id="good-query-form" class="query-form">
+          <label>周期快捷选择<select id="good-query-period">
+            <option value="all">全部范围</option><option value="day">当前业务日</option>
+            <option value="week">本周（周五05:00）</option><option value="month">本月</option>
+            <option value="year">本年</option>
+          </select></label>
+          <div class="date-pair">
+            <label>开始业务日期<input type="date" id="good-query-start"></label>
+            <label>结束业务日期<input type="date" id="good-query-end"></label>
+          </div>
+          <label>开门人模糊查询<input type="search" id="good-query-player" placeholder="例如：小（匹配小玲、小猫）"></label>
+          <button class="primary-button" type="submit">查询开车记录</button>
+        </form>
+        <p class="range-caption" id="good-query-range">不指定时间和玩家时查询全部范围。</p>
+        <div class="ranking-group"><h3>玩家开门次数</h3><ol id="good-query-ranking" class="ranking-list"></ol></div>
+      </div>
     </section>
   </aside>
 
-  <footer><span>业务日以北京时间 05:00 为分界</span><span>页面仅展示公开只读状态</span></footer>
+  <footer><span>业务日以北京时间 05:00 为分界</span><span>实时状态只读；玩家开门信息由访问者自行发布与反馈</span></footer>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>
 </html>

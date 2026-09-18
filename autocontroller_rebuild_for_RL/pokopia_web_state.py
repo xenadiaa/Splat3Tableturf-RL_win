@@ -55,6 +55,7 @@ class PokopiaWebStatePublisher:
                 "label": "正在初始化采集、识别与手柄连接",
             },
             "code": "",
+            "code_unknown": False,
             "code_revision": 0,
             "macro_key": 0,
             "operation_locked": False,

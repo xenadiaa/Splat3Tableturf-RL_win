@@ -124,7 +124,7 @@ CAPTURE_FALLBACK_SPECS = (
 MACRO_HEARTBEAT_TIMEOUT_SECONDS = 45.0
 CAPTURE_HEARTBEAT_TIMEOUT_SECONDS = 15.0
 RESTART_DELAY_SECONDS = 3.0
-MACRO6_BUILD_ID = "v1.43"
+MACRO6_BUILD_ID = "v1.60"
 SUPERVISED_CHILD_ENV = "MACRO6_SUPERVISED_CHILD"
 MACRO_HEARTBEAT_ENV = "MACRO6_MACRO_HEARTBEAT"
 CAPTURE_HEARTBEAT_ENV = "MACRO6_CAPTURE_HEARTBEAT"
@@ -133,12 +133,14 @@ CODE_ARCHIVE_DIRNAME = "pokopia_stamp_records"
 CODE_TIMER_RESTART_SECONDS = 15 * 60
 SEVERE_CODE_TIMER_RESTART_SECONDS = 30 * 60
 CODE_OCR_TIMEOUT_SECONDS = 3 * 60
+CODE_OCR_UNKNOWN_AFTER_FAILURES = 10
 CONNECT_OK_CODE_RETRY_SECONDS = 30.0
 CONTROLLER_IDLE_KEEPALIVE_SECONDS = 5 * 60
 CONTROLLER_IDLE_KEEPALIVE_HOLD_MS = 50
 CONTROLLER_IDLE_KEEPALIVE_GAP_MS = 100
 BEIJING_TIMEZONE = timezone(timedelta(hours=8))
 DAILY_BOUNDARY_HOUR_BEIJING = 5
+BUSINESS_DATE_HOLD_MINUTES = 10
 
 
 def _beijing_operational_date(now: datetime | None = None) -> str:
@@ -149,6 +151,22 @@ def _beijing_operational_date(now: datetime | None = None) -> str:
     beijing_now = current.astimezone(BEIJING_TIMEZONE)
     shifted = beijing_now - timedelta(hours=DAILY_BOUNDARY_HOUR_BEIJING)
     return shifted.date().isoformat()
+
+
+def _in_business_date_hold_window(now: datetime | None = None) -> bool:
+    """Return true from Beijing 04:50:00 through 04:59:59."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    beijing_now = current.astimezone(BEIJING_TIMEZONE)
+    boundary = beijing_now.replace(
+        hour=DAILY_BOUNDARY_HOUR_BEIJING,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    hold_start = boundary - timedelta(minutes=BUSINESS_DATE_HOLD_MINUTES)
+    return hold_start <= beijing_now < boundary
 
 
 @dataclass(frozen=True)
@@ -356,6 +374,35 @@ NETWORK_ERROR_CLOSE_ROI = (0.325, 0.650, 0.400, 0.735)
 NETWORK_ERROR_CLOSE_TEMPLATE_SHAPE = (48, 96)
 NETWORK_ERROR_CLOSE_MIN_DICE = 0.78
 NETWORK_ERROR_CONFIRM_FRAMES = 2
+REOPEN_STAGE_FEATURE_SHAPE = (16, 32)
+REOPEN_STAGE_MIN_CORRELATION = 0.72
+REOPEN_STAGE_CONFIRM_FRAMES = 2
+# “覆盖主机的保存数据” and its disabled “无法覆盖数据” state have almost
+# identical grayscale structure.  The enabled button is bright orange-red,
+# while the disabled button is dark red, so OVERWRITE additionally requires
+# a substantial proportion of bright orange-red pixels in its button ROI.
+REOPEN_OVERWRITE_MIN_BRIGHT_RED_RATIO = 0.50
+# Compact 32x16 grayscale features generated from the four supplied Switch
+# system screens.  Runtime recognition is self-contained and never opens the
+# source PNG files.
+REOPEN_STAGE_FEATURES = {
+    "GO_GAME": (
+        (0.455, 0.270, 0.535, 0.320),
+        "eNpTUiIIlFWAUFlZSRnMBNJAjCwtIyElISMrpyIHlJCUlVeWl5eVRVKhYB/gEWBvbybhJC6jGGGhJ2tlZW2rAFegLOeX3pXlZ5WRNiXeorm7uUQwJs83x0AOYYC0ZJykhLOBT629Q3Rdp6Nqe42oc540woDMypn1GVFRMe1hwT3lFZOzJxXU1oXIqMDkVRQsJrnLyHs3FwSalZeWVRqk2eRG+ErC5ZUkc7LNtAJTA23C5SvKy8s0oz18rX0kleHeK4r2qCkuSu3KmWlRXVVVr5nX7FptJ4Ow31VOK9rDwMDV1NbYzcrSQ9HH1iJGESmApJUVxKXk5aVkZeVlZGSllaRl5CRQAhDoRmUEAIWvihK9AAACC2PN",
+    ),
+    "DOWNLOAD": (
+        (0.130, 0.195, 0.305, 0.275),
+        "eNpzcqIQOLu4OLs4AylnMAAxUKRtLSxtrGwdbKxtraxtbe2d7KztkBXYZE3uyquvCGtsT6hITqjK9shvTrJFVuDREVexb1XZ5IaylXO7jiyduHJ2kbULQtrVtKKjeGHLxImLMoo7S6fOye5bl2mDpN/ZLqOoZWZHUdea+slzW3pbGxYtT0eRtyl0S9u6tLhtQUpBWdqyyTlTJ2cj2+9sm+rjV9FRkp+WlFsYNqGqoacv2wbFh45O9nbW9nYOdsAQsLZ2dLB3xAwjYLA4O4MDC4idBhMAAC3rneE=",
+    ),
+    "CLOSE_GAME": (
+        (0.495, 0.640, 0.780, 0.760),
+        "eNqLKi0oLIKAwsLCgoL8vNycrIy05ITo8JCgwADfttLi4uISMCguBqsCKsnJBqqIj44ID40oNLOygANLKLCysra2sbG1s7N1qXJydcEAzjDg6FNl7+yEBIBiyFwH32oUeUd7BzsUeb8aZHlHj+DACGT1Dv61SPLO9iEl6WUujkgC6PLl2XlI+p3tA5Dtd3YIiE9IckXWH1DhgGyfs6OTM6r+YhR5NACUz3Vwwiuf4uCIGzjZ+ke5uLq6ukGAuxsCuIOAh1O9f3pyWlZ+SUVNfWNza1s7ELS1Njc11Ld09U+ePntZKwA5t5pt",
+    ),
+    "OVERWRITE": (
+        (0.245, 0.680, 0.755, 0.800),
+        "eNpjY2HFB9gFxMVwAXFxCQlBh4ToGJwgOsHBNT4qGieIindzwS/viiQfEQkUiYqMiorCKh+VnhoTmxCXGhuXiE0+NmTexskTZ82YvXx1f3gMpnxM6PQt02ZPX7Zw4ZqpoVjlZ2ydOnnWtAWzVk8OwyYfXtXfWVVZVVTWWR2BRR6oICQ0PCw8IiI0HLv/YmJjYeGGJB8H8jAOEBnn6pYcF48TxCW7aTnbO+ACjg4uOgBGp6aq",
+    ),
+}
 # Neutral-white “关闭” glyph mask from the fixed lower-left button in
 # SCREENSHOT_20260831T103601_694441Z.  Runtime recognition is self-contained;
 # the source screenshot is not opened by watchdog.
@@ -5534,6 +5581,10 @@ class _BusinessDateChanged(Exception):
     """Restart automatic macro1 when Beijing's 05:00 day changes."""
 
 
+class _BusinessDateHold(Exception):
+    """Freeze controller activity at CURSOR during the 04:50 hold window."""
+
+
 class _SevereCodeTimerExpired(Exception):
     """Restart automatic macro1 after 30 minutes regardless of cursor."""
 
@@ -5555,6 +5606,17 @@ class _NeverExpireCodeTimer:
 
 
 _NEVER_EXPIRE_CODE_TIMER = _NeverExpireCodeTimer()
+
+
+REOPEN_REASON_TEXT = {
+    "normal_reopen": "正常重开",
+    "network_connection_error": "网络异常重开",
+    "date_change_reopen": "日期切换重开",
+}
+
+
+def _reopen_reason_text(reason: str) -> str:
+    return REOPEN_REASON_TEXT.get(str(reason), str(reason))
 
 
 class _CursorGatedCodeTimer:
@@ -5585,6 +5647,10 @@ class _CursorGatedCodeTimer:
 
     def arm(self) -> None:
         """Enable the timer after a CODE is ready for stamp checking."""
+        # A business-day boundary crossed while read/load/reopen was
+        # disarmed has already occurred inside an existing reopen and must
+        # not inject another reopen immediately after the new CODE.
+        self._observed_operational_date = _beijing_operational_date()
         self._armed = True
         self.last_trigger_cursor = "INVALID"
         _, self._last_network_error_revision = (
@@ -5596,21 +5662,26 @@ class _CursorGatedCodeTimer:
         self._armed = False
 
     def timer_expired(self) -> bool:
-        # Temporarily disable the Beijing 05:00 automatic reopen trigger.
-        # The 05:00 operating-day boundary remains active for counters,
-        # folders, and logs; only the macro interruption/reopen is suppressed.
-        # current_date = _beijing_operational_date()
-        # if current_date != self._observed_operational_date:
-        #     self._observed_operational_date = current_date
-        #     self.last_trigger_reason = "business_date_changed"
-        #     return True
-
         # A complete read/load/reopen is already the recovery action.  While
         # disarmed, no timer-derived exception may interrupt it and inject a
-        # second restart.  Revision/severe-anchor synchronization is deferred
-        # until arm() and the first STAMP-loop check after the new CODE.
+        # second restart.  arm() consumes any date boundary crossed during
+        # that existing reopen before enabling checks again.
         if not self._armed:
             return False
+
+        current_date = _beijing_operational_date()
+        if current_date != self._observed_operational_date:
+            self._observed_operational_date = current_date
+            self.last_trigger_reason = "business_date_changed"
+            return True
+
+        if (
+            _in_business_date_hold_window()
+            and self._visual_state.immediate_cursor() != "INVALID"
+        ):
+            self.last_trigger_cursor = self._visual_state.immediate_cursor()
+            self.last_trigger_reason = "business_date_hold"
+            return True
 
         _, network_revision = self._visual_state.network_error_state()
         if network_revision > self._last_network_error_revision:
@@ -5707,6 +5778,10 @@ class Macro6RunCounter:
             str, dict[str, int]
         ] = {}
         self._total_player_room_closed_before_arrival: dict[str, int] = {}
+        self._daily_player_network_error_before_arrival: dict[
+            str, dict[str, int]
+        ] = {}
+        self._total_player_network_error_before_arrival: dict[str, int] = {}
         self._load()
 
     @staticmethod
@@ -5831,6 +5906,17 @@ class Macro6RunCounter:
                     self._daily_player_room_closed_before_arrival,
                 )
             )
+            self._daily_player_network_error_before_arrival = (
+                nested_player_counts(
+                    "daily_player_network_error_before_arrival"
+                )
+            )
+            self._total_player_network_error_before_arrival = (
+                total_player_counts(
+                    "total_player_network_error_before_arrival",
+                    self._daily_player_network_error_before_arrival,
+                )
+            )
             migration_needed = False
             if not any(
                 key in raw
@@ -5853,6 +5939,17 @@ class Macro6RunCounter:
                 )
             ):
                 self._backfill_player_failure_rankings_from_room_logs()
+                migration_needed = True
+            if not any(
+                key in raw
+                for key in (
+                    "daily_player_network_error_before_arrival",
+                    "total_player_network_error_before_arrival",
+                )
+            ):
+                # Older summaries did not retain enough information to split
+                # network-error freezes from ordinary reopen freezes.  Start
+                # the new category at zero without rewriting old statistics.
                 migration_needed = True
             if migration_needed:
                 self._save_locked()
@@ -5963,6 +6060,7 @@ class Macro6RunCounter:
             return
         returned_count = 0
         closed_count = 0
+        network_error_count = 0
         for record_path in sorted(
             archive_root.glob("STAMP_*/PLAYERS_*.jsonl")
         ):
@@ -5997,7 +6095,11 @@ class Macro6RunCounter:
                     player_name = str(visit.get("player_name", "")).strip()
                     if not player_name:
                         continue
-                    if bool(visit.get("ended_by_room_freeze", False)):
+                    failure_reason = str(visit.get("failure_reason") or "")
+                    if failure_reason == "network_error_before_arrival":
+                        daily = self._daily_player_network_error_before_arrival
+                        network_error_count += 1
+                    elif bool(visit.get("ended_by_room_freeze", False)):
                         daily = self._daily_player_room_closed_before_arrival
                         closed_count += 1
                     else:
@@ -6024,15 +6126,25 @@ class Macro6RunCounter:
                     )
                     + count
                 )
+        for players in self._daily_player_network_error_before_arrival.values():
+            for player_name, count in players.items():
+                self._total_player_network_error_before_arrival[player_name] = (
+                    self._total_player_network_error_before_arrival.get(
+                        player_name,
+                        0,
+                    )
+                    + count
+                )
         _timestamped_log(
             "玩家失败排行已从既有每轮日志完成一次性迁移："
             f"到达前返回{returned_count}次，"
-            f"房间关闭时未抵达{closed_count}次。"
+            f"房间关闭时未抵达{closed_count}次，"
+            f"网络连接错误时未抵达{network_error_count}次。"
         )
 
     def _save_locked(self) -> None:
         payload = {
-            "version": 8,
+            "version": 9,
             "metric": "completed_macro_code_updates",
             "timezone": "Asia/Shanghai (UTC+08:00)",
             "day_boundary": "05:00",
@@ -6080,6 +6192,15 @@ class Macro6RunCounter:
                 date: dict(sorted(players.items()))
                 for date, players in sorted(
                     self._daily_player_room_closed_before_arrival.items()
+                )
+            },
+            "total_player_network_error_before_arrival": dict(
+                sorted(self._total_player_network_error_before_arrival.items())
+            ),
+            "daily_player_network_error_before_arrival": {
+                date: dict(sorted(players.items()))
+                for date, players in sorted(
+                    self._daily_player_network_error_before_arrival.items()
                 )
             },
             "updated_at_utc": datetime.now(timezone.utc)
@@ -6234,6 +6355,9 @@ class Macro6RunCounter:
             elif reason == "room_closed_before_arrival":
                 daily_by_name = self._daily_player_room_closed_before_arrival
                 total_by_name = self._total_player_room_closed_before_arrival
+            elif reason == "network_error_before_arrival":
+                daily_by_name = self._daily_player_network_error_before_arrival
+                total_by_name = self._total_player_network_error_before_arrival
             else:
                 daily_by_name = None
                 total_by_name = None
@@ -6436,7 +6560,7 @@ class _RoundAnnouncementTracker:
                 f"预计开到盖满或[{deadline:%Y-%m-%d %H:%M:%S}]",
                 "大家把握好时间！谨防两车之间的间隙夹人！"
                 "如果确认无法进入，请私聊反馈对应密语，感谢各位协助！",
-                "可访问 rabi.date 查看",
+                "大家也可在页面上传自己的开门码",
             )
         )
 
@@ -6493,6 +6617,7 @@ class _PokopiaVisualState:
         self.save_finished_event = threading.Event()
         self._lock = threading.Lock()
         self._cursor = "INVALID"
+        self._immediate_cursor = "INVALID"
         self._last_valid_cursor_monotonic = 0.0
         self._stamp = "INVALID"
         self._reward = False
@@ -6504,6 +6629,7 @@ class _PokopiaVisualState:
         self._connect_ok = False
         self._network_error = False
         self._network_error_revision = 0
+        self._reopen_stage = "INVALID"
         self._reward_archive: StampCodeArchive | None = None
         self._room_player_tracker: RoomPlayerTracker | None = None
 
@@ -6520,6 +6646,7 @@ class _PokopiaVisualState:
             self.save_finished_event.clear()
         now = time.monotonic()
         with self._lock:
+            self._immediate_cursor = detection.cursor
             if detection.cursor != "INVALID":
                 self._cursor = detection.cursor
                 self._last_valid_cursor_monotonic = now
@@ -6547,10 +6674,16 @@ class _PokopiaVisualState:
             if detection.network_error and not self._network_error:
                 self._network_error_revision += 1
             self._network_error = detection.network_error
+            self._reopen_stage = detection.reopen_stage
 
     def cursor(self) -> str:
         with self._lock:
             return self._cursor
+
+    def immediate_cursor(self) -> str:
+        """Return this frame's cursor without the INVALID grace period."""
+        with self._lock:
+            return self._immediate_cursor
 
     def stamp(self) -> str:
         with self._lock:
@@ -6572,6 +6705,10 @@ class _PokopiaVisualState:
         """Return current visibility and a rising-edge revision counter."""
         with self._lock:
             return self._network_error, self._network_error_revision
+
+    def reopen_stage(self) -> str:
+        with self._lock:
+            return self._reopen_stage
 
     def code_panel(self) -> bool:
         with self._lock:
@@ -6652,7 +6789,7 @@ class _HeartbeatMacroContext(_MacroContext):
         self._active_macro_key = 0
         self._automatic_restart_guard: _CursorGatedCodeTimer | None = None
         self._room_player_tracker: RoomPlayerTracker | None = None
-        self._disconnect_on_next_home = False
+        self._disconnect_on_next_home_reason = ""
         self._controller_activity_lock = threading.Lock()
         self._last_controller_input_monotonic = time.monotonic()
         self._idle_keepalive_in_progress = False
@@ -6747,6 +6884,35 @@ class _HeartbeatMacroContext(_MacroContext):
         if publisher is not None:
             publisher.set_announcement(text)
 
+    def set_web_code_ready(
+        self,
+        code: str,
+        *,
+        code_unknown: bool,
+        revision: int,
+    ) -> None:
+        """Publish the new CODE and open status in one atomic state merge."""
+        key = "code_unknown_ready" if code_unknown else "code_ready"
+        label = (
+            "CODE未能自动识别，请根据截图读取；正在返回STAMP页面"
+            if code_unknown
+            else "六位CODE已识别，正在返回STAMP页面"
+        )
+        self._web_phase_key = key
+        publisher = self._web_publisher
+        if publisher is not None:
+            publisher.update(
+                code=str(code),
+                code_unknown=bool(code_unknown),
+                code_revision=max(0, int(revision)),
+                phase={"key": key, "label": label},
+                status={
+                    "key": "open",
+                    "label": "开放中",
+                    "tone": "green",
+                },
+            )
+
     def set_reopen_screenshot_callback(self, callback) -> None:
         self._reopen_screenshot_callback = callback
 
@@ -6756,10 +6922,10 @@ class _HeartbeatMacroContext(_MacroContext):
         if callback is not None:
             callback(reason)
 
-    def mark_room_disconnected(self) -> None:
+    def mark_room_disconnected(self, reopen_reason: str) -> None:
         tracker = self._room_player_tracker
         if tracker is not None:
-            tracker.mark_room_disconnected()
+            tracker.mark_room_disconnected(reopen_reason)
 
     def take_previous_round_player_entries(self) -> int:
         tracker = self._room_player_tracker
@@ -6767,17 +6933,23 @@ class _HeartbeatMacroContext(_MacroContext):
             return 0
         return tracker.take_previous_round_entries()
 
-    def arm_room_disconnect_on_next_home(self) -> None:
+    def arm_room_disconnect_on_next_home(
+        self,
+        reopen_reason: str = "normal_reopen",
+    ) -> None:
         """Freeze the room at the first HOME actually sent by a reopen."""
-        self._disconnect_on_next_home = True
+        self._disconnect_on_next_home_reason = str(
+            reopen_reason or "normal_reopen"
+        )
 
     def disarm_room_disconnect_on_next_home(self) -> None:
-        self._disconnect_on_next_home = False
+        self._disconnect_on_next_home_reason = ""
 
     def tap(self, bit_index: int, hold_ms: int, gap_ms: int) -> bool:
-        if bit_index == BIT_HOME and self._disconnect_on_next_home:
-            self._disconnect_on_next_home = False
-            self.mark_room_disconnected()
+        if bit_index == BIT_HOME and self._disconnect_on_next_home_reason:
+            reopen_reason = self._disconnect_on_next_home_reason
+            self._disconnect_on_next_home_reason = ""
+            self.mark_room_disconnected(reopen_reason)
         return super().tap(bit_index, hold_ms, gap_ms)
 
     def toggle_operation_lock(self) -> bool:
@@ -6914,6 +7086,8 @@ def _raise_if_code_timer_expired(code_recognizer: CodeRecognizer) -> None:
     reason = getattr(code_recognizer, "last_trigger_reason", "")
     if reason == "network_connection_error":
         raise _NetworkConnectionError
+    if reason == "business_date_hold":
+        raise _BusinessDateHold
     if reason == "business_date_changed":
         raise _BusinessDateChanged
     if reason == "severe_timeout":
@@ -6947,6 +7121,19 @@ def _wait_for_visual_state_with_code_timer(
         if not context.wait_ms(100):
             return False
     _raise_if_code_timer_expired(code_recognizer)
+    return True
+
+
+def _wait_for_business_date_boundary(
+    context: _HeartbeatMacroContext,
+    operational_date: str,
+) -> bool:
+    """Wait for 05:00 while retaining the 300-second idle keepalive."""
+    while _beijing_operational_date() == operational_date:
+        # The ordinary wait path maintains heartbeat/pause/interrupt handling
+        # and deliberately retains the five-minute DPAD UP/DOWN keepalive.
+        if not context.wait_ms(250):
+            return False
     return True
 
 
@@ -7010,12 +7197,12 @@ def _navigate_until_cursor_stamp(
             if action == "REWARD":
                 _timestamped_log(
                     "CURSOR:INVALID 且 REWARD:TRUE："
-                    "等待5000ms后按B。"
+                    "等待2000ms后按B。"
                 )
                 if not _wait_ms_with_code_timer(
                     context,
                     code_recognizer,
-                    5000,
+                    2000,
                 ):
                     return False
                 detected_lines = visual_state.reward_lines()
@@ -7046,8 +7233,59 @@ def _navigate_until_cursor_stamp(
             return False
 
 
+def _wait_for_reopen_stages(
+    context: _HeartbeatMacroContext,
+    visual_state: _PokopiaVisualState,
+    *,
+    start_stage: str = "GO_GAME",
+) -> bool:
+    """Advance from the current expected Switch save-data stage."""
+    stages = (
+        "GO_GAME",
+        "DOWNLOAD",
+        "CLOSE_GAME",
+        "OVERWRITE",
+    )
+    try:
+        start_index = stages.index(start_stage)
+    except ValueError as exc:
+        raise ValueError(f"未知重开阶段入口：{start_stage}") from exc
+    for expected in stages[start_index:]:
+        context.set_web_phase(
+            "waiting_reopen_stage",
+            f"正在等待重开阶段：{expected}",
+        )
+        _timestamped_log(f"开始等待重开阶段：{expected}。")
+        while visual_state.reopen_stage() != expected:
+            if not context.wait_ms(100):
+                return False
+        _timestamped_log(f"已识别重开阶段：{expected}。")
+
+        if expected == "GO_GAME":
+            if not context.wait_ms(1000):
+                return False
+            if not context.tap(BIT_A, hold_ms=50, gap_ms=1000):
+                return False
+            if not context.tap(BIT_A, hold_ms=50, gap_ms=500):
+                return False
+            if not context.tap(BIT_A, hold_ms=50, gap_ms=0):
+                return False
+        elif expected in {"DOWNLOAD", "CLOSE_GAME"}:
+            if not context.tap(BIT_A, hold_ms=50, gap_ms=0):
+                return False
+        else:
+            if not context.wait_ms(500):
+                return False
+            if not context.tap(BIT_DPAD_UP, hold_ms=50, gap_ms=500):
+                return False
+            if not context.tap(BIT_A, hold_ms=50, gap_ms=0):
+                return False
+    return True
+
+
 def _run_smart_macro_6_part_1(
-    context: _MacroContext,
+    context: _HeartbeatMacroContext,
+    visual_state: _PokopiaVisualState,
     *,
     start_at_home: bool = False,
 ) -> bool:
@@ -7090,18 +7328,12 @@ def _run_smart_macro_6_part_1(
         (BIT_A, 500),
         *((BIT_DPAD_DOWN, 500) for _ in range(3)),
         (BIT_A, 500),
-        (BIT_A, 3000),
-        (BIT_A, 500),
-        (BIT_A, 3500),
-        (BIT_A, 1000),
-        (BIT_A, 4000),
-        (BIT_DPAD_UP, 500),
         (BIT_A, 0),
     )
     for bit_index, gap_ms in steps:
         if not context.tap(bit_index, hold_ms=50, gap_ms=gap_ms):
             return False
-    return True
+    return _wait_for_reopen_stages(context, visual_state)
 
 
 def _run_original_macro1_chain(
@@ -7110,7 +7342,7 @@ def _run_original_macro1_chain(
 ) -> bool:
     """Run old macro1, then the current key-4 sequence after save success."""
     context.record_reopen_screenshot("manual_key_3_read_load")
-    completed = _run_smart_macro_6_part_1(context)
+    completed = _run_smart_macro_6_part_1(context, visual_state)
     if completed:
         _timestamped_log(
             "旧1宏动作已完成，开始等待 POK_SAV_STATE=true。"
@@ -7157,6 +7389,14 @@ def _run_macro12_after_download(
     if not _wait_for_visual_state(context, visual_state.black_screen):
         return False
     _timestamped_log("检测到 BLACK SCREEN=ON，等待黑屏消失。")
+    return _run_macro12_after_black_started(context, visual_state)
+
+
+def _run_macro12_after_black_started(
+    context: _HeartbeatMacroContext,
+    visual_state: _PokopiaVisualState,
+) -> bool:
+    """Continue key 1/2 after BLACK SCREEN has already appeared."""
     context.set_web_phase("waiting_black_off", "已进入黑屏，正在等待游戏加载完成")
     if not _wait_for_visual_state(
         context,
@@ -7272,22 +7512,44 @@ def _run_macro12_download_chain(
     visual_state: _PokopiaVisualState,
     *,
     start_at_home: bool = False,
+    reopen_reason: str | None = None,
 ) -> bool:
     """Run key 1/2's first part, then use the black-screen-gated ending."""
+    effective_reopen_reason = str(
+        reopen_reason
+        or (
+            "network_connection_error"
+            if start_at_home
+            else "normal_reopen"
+        )
+    )
     context.set_web_phase(
         "reopening",
-        "网络异常后从HOME重开" if start_at_home else "正在结束上轮并执行完整读档重开",
+        (
+            "网络异常后从HOME重开"
+            if start_at_home
+            else (
+                "业务日期切换，正在执行完整读档重开"
+                if effective_reopen_reason == "date_change_reopen"
+                else "正在结束上轮并执行完整读档重开"
+            )
+        ),
         status_key="reopening",
-        status_label="重开中",
+        status_label=(
+            "日期切换重开"
+            if effective_reopen_reason == "date_change_reopen"
+            else "重开中"
+        ),
         tone="amber",
     )
-    context.record_reopen_screenshot(
-        "network_connection_error" if start_at_home else "normal_reopen"
+    context.record_reopen_screenshot(effective_reopen_reason)
+    context.arm_room_disconnect_on_next_home(
+        effective_reopen_reason
     )
-    context.arm_room_disconnect_on_next_home()
     try:
         completed = _run_smart_macro_6_part_1(
             context,
+            visual_state,
             start_at_home=start_at_home,
         )
     finally:
@@ -7338,14 +7600,12 @@ def _run_macro4_with_cursor_retry(
     return _wait_for_connect_ok_and_submit(context, visual_state)
 
 
-def _run_stamp_check_until_no(
+def _leave_code_page_and_locate_stamp(
     context: _HeartbeatMacroContext,
     visual_state: _PokopiaVisualState,
     timer_guard,
-    *,
-    arm_timer_before_poll: bool = False,
 ) -> bool:
-    """Navigate to STAMP and keep polling until STAMP:NO."""
+    """Leave the CODE page with B/up/right/down and locate STAMP."""
     context.set_web_phase("locating_stamp", "新轮次已建立，正在定位STAMP光标")
     _timestamped_log("等待 5000ms 后执行 B→上→右→下并定位 STAMP。")
     if not _wait_ms_with_code_timer(context, timer_guard, 5000):
@@ -7362,6 +7622,23 @@ def _run_stamp_check_until_no(
 
     _timestamped_log("导航动作完成，等待 CURSOR:STAMP。")
     if not _navigate_until_cursor_stamp(
+        context,
+        visual_state,
+        timer_guard,
+    ):
+        return False
+    return True
+
+
+def _run_stamp_check_until_no(
+    context: _HeartbeatMacroContext,
+    visual_state: _PokopiaVisualState,
+    timer_guard,
+    *,
+    arm_timer_before_poll: bool = False,
+) -> bool:
+    """Navigate to STAMP and keep polling until STAMP:NO."""
+    if not _leave_code_page_and_locate_stamp(
         context,
         visual_state,
         timer_guard,
@@ -7565,10 +7842,15 @@ def _run_dynamic_macro_start(
     if code_panel:
         if not _wait_for_visual_state(
             context,
-            lambda: bool(code_recognizer.snapshot()),
+            lambda: bool(code_recognizer.snapshot())
+            or code_recognizer.is_unknown(),
         ):
             return True, False
-        entry_code = code_recognizer.snapshot()
+        entry_code = (
+            "未知"
+            if code_recognizer.is_unknown()
+            else code_recognizer.snapshot()
+        )
         if macro_key == 1:
             code_recognizer.record_current("按键1动态入口", force=True)
             _timestamped_log("按键1动态起点：CODE画面；入口不计数。")
@@ -7652,6 +7934,7 @@ def _queue_code_input_to_chrome(
             result = input_code_to_chrome(
                 code,
                 expanded_text=expanded_text,
+                allow_unknown=code == "未知",
             )
         except Exception as exc:
             _timestamped_log(
@@ -7679,7 +7962,7 @@ def _wait_for_new_code_and_count(
     announcement_tracker: _RoundAnnouncementTracker,
     macro_key: int,
 ) -> bool:
-    """Wait past the entry CODE and count only a newly produced CODE."""
+    """Wait for a new CODE, or continue after ten failed OCR attempts."""
     code_panel_started_at: float | None = None
     while code_recognizer.revision() <= baseline_revision:
         if visual_state.code_panel():
@@ -7688,21 +7971,33 @@ def _wait_for_new_code_and_count(
                 code_panel_started_at = now
                 _timestamped_log(
                     f"按键{macro_key}已检测到绿色CODE面板；"
-                    "OCR每1秒重试，3分钟内等待有效新CODE。"
+                    "OCR每1秒重试，连续10次失败后以未知CODE继续。"
                 )
             elif now - code_panel_started_at >= CODE_OCR_TIMEOUT_SECONDS:
                 raise _CodeRecognitionTimedOut
         if not context.wait_ms(100):
             return False
     code_recognizer.end_ocr_round()
-    code = code_recognizer.snapshot()
-    code_recognizer.record_current(f"按键{macro_key}执行后新CODE")
+    code_unknown = code_recognizer.is_unknown()
+    code = "未知" if code_unknown else code_recognizer.snapshot()
+    if not code_unknown:
+        # Finish the CODE screenshot before exposing this revision publicly,
+        # so visitors never receive the prior round's image with the new CODE.
+        code_recognizer.record_current(f"按键{macro_key}执行后新CODE")
+    context.set_web_code_ready(
+        "" if code_unknown else code,
+        code_unknown=code_unknown,
+        revision=code_recognizer.revision(),
+    )
     count = run_counter.record_code_update()
     _log_run_counter(count)
-    _timestamped_log(
-        f"按键{macro_key}检测到执行后新CODE："
-        f"{code}。"
-    )
+    if code_unknown:
+        _timestamped_log(
+            f"按键{macro_key}连续{CODE_OCR_UNKNOWN_AFTER_FAILURES}次未能识别"
+            "六位CODE：本轮按未知CODE继续，网页显示？？？？？？并展示截图。"
+        )
+    else:
+        _timestamped_log(f"按键{macro_key}检测到执行后新CODE：{code}。")
     announcement_text = announcement_tracker.begin_round(
         code,
         count.daily_runs,
@@ -7716,6 +8011,121 @@ def _wait_for_new_code_and_count(
         announcement_text,
     )
     return True
+
+
+def _resume_connect_ok_to_new_code(
+    context: _HeartbeatMacroContext,
+    visual_state: _PokopiaVisualState,
+    code_recognizer: CodeRecognizer,
+    run_counter: Macro6RunCounter,
+    announcement_tracker: _RoundAnnouncementTracker,
+    macro_key: int,
+) -> bool:
+    """Continue an already-open CONNECT_OK screen through new-CODE handling."""
+    baseline_revision = code_recognizer.revision()
+    announcement_tracker.ensure_restart_started()
+    _timestamped_log(
+        f"按键{macro_key}动态起点：CONNECT_OK=ON；"
+        "按A继续重开最后阶段并等待新CODE。"
+    )
+    if not _wait_for_connect_ok_and_submit(context, visual_state):
+        return False
+    code_recognizer.begin_ocr_round(macro_key)
+    return _wait_for_new_code_and_count(
+        context,
+        visual_state,
+        code_recognizer,
+        baseline_revision,
+        run_counter,
+        announcement_tracker,
+        macro_key,
+    )
+
+
+def _resume_reopen_visual_entry_to_new_code(
+    context: _HeartbeatMacroContext,
+    visual_state: _PokopiaVisualState,
+    code_recognizer: CodeRecognizer,
+    run_counter: Macro6RunCounter,
+    announcement_tracker: _RoundAnnouncementTracker,
+    macro_key: int,
+    entry: str,
+) -> bool:
+    """Resume an already-running read/load flow from its visible stage."""
+    baseline_revision = code_recognizer.revision()
+    announcement_tracker.ensure_restart_started()
+    context.set_web_phase(
+        "resuming_reopen",
+        f"从当前画面继续重开：{entry}",
+        status_key="reopening",
+        status_label="重开中",
+        tone="amber",
+    )
+
+    if entry == "BLACK_SCREEN":
+        _timestamped_log(
+            f"按键{macro_key}动态起点：BLACK SCREEN=ON；"
+            "等待黑屏消失后继续开门流程。"
+        )
+        completed = _run_macro12_after_black_started(
+            context,
+            visual_state,
+        )
+    elif entry == "SAVE_FINISHED":
+        _timestamped_log(
+            f"按键{macro_key}动态起点：POK_SAV_STATE=true；"
+            "直接执行HOME→A×4并等待黑屏。"
+        )
+        completed = _run_macro12_after_download(context, visual_state)
+    elif entry in REOPEN_STAGE_FEATURES:
+        _timestamped_log(
+            f"按键{macro_key}动态起点：REOPEN_STAGE:{entry}；"
+            "从当前存档阶段继续，不重复此前步骤。"
+        )
+        completed = _wait_for_reopen_stages(
+            context,
+            visual_state,
+            start_stage=entry,
+        )
+        if completed:
+            context.set_web_phase("waiting_save", "正在等待存档下载完成对勾")
+            _timestamped_log(
+                "存档阶段操作已完成，持续等待 POK_SAV_STATE=true。"
+            )
+        while completed and not visual_state.save_finished_event.is_set():
+            completed = context.wait_ms(100)
+        if completed:
+            completed = _run_macro12_after_download(context, visual_state)
+    else:
+        raise ValueError(f"未知动态重开入口：{entry}")
+
+    if not completed:
+        return False
+    code_recognizer.begin_ocr_round(macro_key)
+    _timestamped_log(
+        f"按键{macro_key}已从{entry}续接至CODE画面，等待新CODE。"
+    )
+    return _wait_for_new_code_and_count(
+        context,
+        visual_state,
+        code_recognizer,
+        baseline_revision,
+        run_counter,
+        announcement_tracker,
+        macro_key,
+    )
+
+
+def _current_reopen_visual_entry(
+    visual_state: _PokopiaVisualState,
+) -> str:
+    """Return the highest-priority resumable read/load screen."""
+    if visual_state.black_screen():
+        return "BLACK_SCREEN"
+    if visual_state.save_finished_event.is_set():
+        return "SAVE_FINISHED"
+    stage = visual_state.reopen_stage()
+    return stage if stage in REOPEN_STAGE_FEATURES else ""
 
 
 def _run_automatic_macro1(
@@ -7736,10 +8146,79 @@ def _run_automatic_macro1(
     announcement_tracker = _RoundAnnouncementTracker()
     dynamic_start_pending = True
     network_reopen_from_home = False
+    pending_reopen_reason = "normal_reopen"
     while not context.stop_event.is_set():
         try:
             if dynamic_start_pending:
                 dynamic_start_pending = False
+                if (
+                    visual_state.connect_ok()
+                    and not visual_state.code_panel()
+                ):
+                    # CONNECT_OK is already part of an in-progress reopen.  Do
+                    # not discard it by starting read/load from the beginning.
+                    timer_guard.disarm()
+                    if not _resume_connect_ok_to_new_code(
+                        context,
+                        visual_state,
+                        code_recognizer,
+                        run_counter,
+                        announcement_tracker,
+                        1,
+                    ):
+                        return False
+                    _timestamped_log(
+                        "按键1从CONNECT_OK取得新CODE；进入STAMP循环检测时"
+                        "重新启用15分钟/30分钟保护。"
+                    )
+                    if not _run_stamp_check_until_no(
+                        context,
+                        visual_state,
+                        timer_guard,
+                        arm_timer_before_poll=True,
+                    ):
+                        return False
+                    announcement_tracker.mark_stamp_full()
+                    timer_guard.disarm()
+                    _timestamped_log(
+                        "按键1从CONNECT_OK续接的轮次检测到STAMP:NO，"
+                        "返回自动宏开头执行完整流程。"
+                    )
+                    continue
+                reopen_entry = _current_reopen_visual_entry(visual_state)
+                if reopen_entry:
+                    # A visible save/load stage means a reopen is already in
+                    # progress.  Continue from that exact screen instead of
+                    # issuing another escape/HOME sequence.
+                    timer_guard.disarm()
+                    if not _resume_reopen_visual_entry_to_new_code(
+                        context,
+                        visual_state,
+                        code_recognizer,
+                        run_counter,
+                        announcement_tracker,
+                        1,
+                        reopen_entry,
+                    ):
+                        return False
+                    _timestamped_log(
+                        f"按键1从{reopen_entry}取得新CODE；进入STAMP循环检测时"
+                        "重新启用15分钟/30分钟保护。"
+                    )
+                    if not _run_stamp_check_until_no(
+                        context,
+                        visual_state,
+                        timer_guard,
+                        arm_timer_before_poll=True,
+                    ):
+                        return False
+                    announcement_tracker.mark_stamp_full()
+                    timer_guard.disarm()
+                    _timestamped_log(
+                        f"按键1从{reopen_entry}续接的轮次检测到STAMP:NO，"
+                        "返回自动宏开头执行完整流程。"
+                    )
+                    continue
                 handled, completed = _run_dynamic_macro_start(
                     context,
                     visual_state,
@@ -7770,9 +8249,11 @@ def _run_automatic_macro1(
                 context,
                 visual_state,
                 start_at_home=network_reopen_from_home,
+                reopen_reason=pending_reopen_reason,
             ):
                 return False
             network_reopen_from_home = False
+            pending_reopen_reason = "normal_reopen"
             code_recognizer.begin_ocr_round(1)
             _timestamped_log("旧宏组合已完成，继续等待 Pokopia CODE 变化。")
             if not _wait_for_new_code_and_count(
@@ -7809,6 +8290,7 @@ def _run_automatic_macro1(
             )
             timer_guard.disarm()
             network_reopen_from_home = True
+            pending_reopen_reason = "network_connection_error"
             _timestamped_log(
                 "检测到Switch连接错误弹窗：结束本轮并记录开放时长；"
                 "网络异常重开跳过HOME之前的全部动作，直接从HOME开始完整读档/重开。"
@@ -7821,12 +8303,46 @@ def _run_automatic_macro1(
                 tone="red",
             )
             continue
+        except _BusinessDateHold:
+            hold_date = _beijing_operational_date()
+            hold_cursor = timer_guard.last_trigger_cursor
+            timer_guard.disarm()
+            context.set_web_phase(
+                "waiting_date_boundary",
+                "04:50业务日保护：已暂停控制，等待05:00重开",
+                status_key="waiting",
+                status_label="等待日期切换",
+                tone="amber",
+            )
+            _timestamped_log(
+                "北京时间04:50–05:00保护窗内首次确认"
+                f"CURSOR:{hold_cursor}；暂停宏流程并等待05:00；"
+                "保留300秒DPAD上下空闲保活。"
+            )
+            if not _wait_for_business_date_boundary(context, hold_date):
+                return False
+            announcement_tracker.mark_business_date_changed()
+            network_reopen_from_home = False
+            pending_reopen_reason = "date_change_reopen"
+            _timestamped_log(
+                "北京时间已到05:00：结束保护等待，执行一次日期切换重开。"
+            )
+            context.set_web_phase(
+                "date_change_reopen",
+                "业务日期已切换，正在重新开放",
+                status_key="reopening",
+                status_label="日期切换重开",
+                tone="amber",
+            )
+            continue
         except _BusinessDateChanged:
             announcement_tracker.mark_business_date_changed()
             timer_guard.disarm()
+            network_reopen_from_home = False
+            pending_reopen_reason = "date_change_reopen"
             _timestamped_log(
                 "北京时间已到05:00，业务日期发生变更；"
-                "不判断CURSOR，立即返回自动宏开头执行完整读档/重开。"
+                "当前不在重开流程，立即执行一次日期切换重开。"
             )
             context.set_web_phase(
                 "date_change_reopen",
@@ -7839,6 +8355,8 @@ def _run_automatic_macro1(
         except _SevereCodeTimerExpired:
             announcement_tracker.mark_severe_timeout()
             timer_guard.disarm()
+            network_reopen_from_home = False
+            pending_reopen_reason = "normal_reopen"
             _timestamped_log(
                 "CODE更新已严重超时30分钟；不判断CURSOR，"
                 "立即返回自动宏开头执行完整读档/重开。"
@@ -7855,6 +8373,8 @@ def _run_automatic_macro1(
             trigger_cursor = timer_guard.last_trigger_cursor
             announcement_tracker.mark_timeout()
             timer_guard.disarm()
+            network_reopen_from_home = False
+            pending_reopen_reason = "normal_reopen"
             _timestamped_log(
                 "CODE 更新计时已达到15分钟，且当前为"
                 f"CURSOR:{trigger_cursor}；关闭再次触发并返回自动宏开头"
@@ -7899,6 +8419,60 @@ def _run_dynamic_macro2_once(
     context.set_automatic_restart_guard(network_guard)
     try:
         _raise_if_code_timer_expired(network_guard)
+        if visual_state.connect_ok() and not visual_state.code_panel():
+            if not _resume_connect_ok_to_new_code(
+                context,
+                visual_state,
+                code_recognizer,
+                run_counter,
+                announcement_tracker,
+                2,
+            ):
+                return False
+            if code_recognizer.is_unknown():
+                _timestamped_log(
+                    "按键2从CONNECT_OK取得未知CODE：执行B→上→右→下，"
+                    "返回CURSOR:STAMP后停止。"
+                )
+                if not _leave_code_page_and_locate_stamp(
+                    context,
+                    visual_state,
+                    network_guard,
+                ):
+                    return False
+            _timestamped_log(
+                "按键2已从CONNECT_OK继续并取得新CODE，单次流程结束。"
+            )
+            network_guard.disarm()
+            return True
+        reopen_entry = _current_reopen_visual_entry(visual_state)
+        if reopen_entry:
+            if not _resume_reopen_visual_entry_to_new_code(
+                context,
+                visual_state,
+                code_recognizer,
+                run_counter,
+                announcement_tracker,
+                2,
+                reopen_entry,
+            ):
+                return False
+            if code_recognizer.is_unknown():
+                _timestamped_log(
+                    f"按键2从{reopen_entry}取得未知CODE：执行B→上→右→下，"
+                    "返回CURSOR:STAMP后停止。"
+                )
+                if not _leave_code_page_and_locate_stamp(
+                    context,
+                    visual_state,
+                    network_guard,
+                ):
+                    return False
+            _timestamped_log(
+                f"按键2已从{reopen_entry}继续并取得新CODE，单次流程结束。"
+            )
+            network_guard.disarm()
+            return True
         handled, completed = _run_dynamic_macro_start(
             context,
             visual_state,
@@ -7915,6 +8489,12 @@ def _run_dynamic_macro2_once(
             _timestamped_log(
                 "按键2动态入口的STAMP检查已完成，开始执行原按键2内容。"
             )
+    except _CodeRecognitionTimedOut:
+        code_recognizer.record_ocr_timeout_error(2)
+        _timestamped_log(
+            "按键2从CONNECT_OK进入的绿色CODE面板持续3分钟仍未识别成功；"
+            "改为执行一次完整读档/重开。"
+        )
     except _NetworkConnectionError:
         announcement_tracker.mark_network_connection_error(
             code_recognizer.timer_elapsed_seconds()
@@ -7957,11 +8537,28 @@ def _run_dynamic_macro2_once(
                 "不计数、不发送，重新执行一次完整读档/重开。"
             )
             continue
+        if code_recognizer.is_unknown():
+            _timestamped_log(
+                "按键2本轮CODE为未知：按要求执行B→上→右→下，"
+                "返回CURSOR:STAMP后再停止。"
+            )
+            if not _leave_code_page_and_locate_stamp(
+                context,
+                visual_state,
+                network_guard,
+            ):
+                return False
         break
-    _timestamped_log(
-        "按键2已到达新CODE画面，停止并返回待机；"
-        "需要再次手动按2才能继续。"
-    )
+    if code_recognizer.is_unknown():
+        _timestamped_log(
+            "按键2未知CODE截图已播报，且已返回CURSOR:STAMP；"
+            "停止并等待下一次手动按2。"
+        )
+    else:
+        _timestamped_log(
+            "按键2已到达新CODE画面，停止并返回待机；"
+            "需要再次手动按2才能继续。"
+        )
     return True
 
 
@@ -8286,6 +8883,7 @@ class PokopiaDetection:
     reward_lines: int
     stamp: str
     network_error: bool
+    reopen_stage: str = "INVALID"
 
 
 class StampCodeArchive:
@@ -8350,6 +8948,7 @@ class StampCodeArchive:
                         "REWARD_LINES": detection.reward_lines,
                         "STAMP": detection.stamp,
                         "NETWORK_ERROR": detection.network_error,
+                        "REOPEN_STAGE": detection.reopen_stage,
                     },
                 }
                 with record_path.open("a", encoding="utf-8") as output:
@@ -8405,6 +9004,9 @@ class StampCodeArchive:
                     "code": retained_code,
                     "timeout_seconds": CODE_OCR_TIMEOUT_SECONDS,
                     "ocr_retry_seconds": CODE_OCR_RETRY_SECONDS,
+                    "ocr_unknown_after_failures": (
+                        CODE_OCR_UNKNOWN_AFTER_FAILURES
+                    ),
                     "ocr_failure_count": max(0, int(failure_count)),
                     "ocr_results": list(ocr_results),
                     "screenshot": (
@@ -8424,6 +9026,7 @@ class StampCodeArchive:
                             "REWARD_LINES": detection.reward_lines,
                             "STAMP": detection.stamp,
                             "NETWORK_ERROR": detection.network_error,
+                            "REOPEN_STAGE": detection.reopen_stage,
                         }
                         if detection is not None
                         else None
@@ -8477,6 +9080,7 @@ class StampCodeArchive:
                         "REWARD_LINES": detection.reward_lines,
                         "STAMP": detection.stamp,
                         "NETWORK_ERROR": detection.network_error,
+                        "REOPEN_STAGE": detection.reopen_stage,
                     },
                 }
                 with record_path.open("a", encoding="utf-8") as output:
@@ -8522,6 +9126,7 @@ class StampCodeArchive:
                     "round_total": run_count.total_runs,
                     "code": code,
                     "reason": reason,
+                    "reason_text": _reopen_reason_text(reason),
                     "macro_key": int(macro_key),
                     "screenshot": filename if screenshot_saved else "未保存",
                 }
@@ -8531,7 +9136,8 @@ class StampCodeArchive:
                     "重开前原始截图已归档："
                     f"本日第{run_count.daily_runs}轮、总第"
                     f"{run_count.total_runs}轮、CODE={code or '<空>'}、"
-                    f"原因={reason}；{folder_name}/{record['screenshot']}"
+                    f"原因={_reopen_reason_text(reason)}；"
+                    f"{folder_name}/{record['screenshot']}"
                 )
             except Exception as exc:
                 _timestamped_log(f"重开前原始截图保存失败：{exc}")
@@ -8786,6 +9392,9 @@ class StampCodeArchive:
         frozen_at_utc: datetime,
         round_player_entries: int,
         round_player_entry_failures: int,
+        *,
+        reopen_reason: str = "normal_reopen",
+        network_error_player_names: tuple[str, ...] = (),
     ) -> int:
         """Write every distinct player visit closed by one reopen."""
         frozen_at_beijing = frozen_at_utc.astimezone(BEIJING_TIMEZONE)
@@ -8826,12 +9435,26 @@ class StampCodeArchive:
                         "本轮一共"
                         f"{max(0, int(round_player_entry_failures))}次进入失败"
                     ),
+                    "reopen_reason": str(reopen_reason),
+                    "reopen_reason_text": _reopen_reason_text(
+                        reopen_reason
+                    ),
+                    "network_connection_error": {
+                        "detected": (
+                            reopen_reason == "network_connection_error"
+                        ),
+                        "players_not_arrived": list(
+                            network_error_player_names
+                        ),
+                        "count": len(network_error_player_names),
+                    },
                     "players": list(visits),
                 }
                 with record_path.open("a", encoding="utf-8") as output:
                     output.write(json.dumps(record, ensure_ascii=False) + "\n")
                 _timestamped_log(
                     f"今日第{reopen_index}次重开玩家记录已写入："
+                    f"原因={_reopen_reason_text(reopen_reason)}，"
                     f"共{len(visits)}次进入尝试，"
                     f"成功{max(0, int(round_player_entries))}人，"
                     f"失败{max(0, int(round_player_entry_failures))}人。"
@@ -8850,6 +9473,7 @@ class _PlayerVisit:
     arrived_at_utc: datetime | None = None
     ended_at_utc: datetime | None = None
     ended_by_freeze: bool = False
+    ended_by_network_error: bool = False
     available_rewards: int = 0
     completed_rewards: int = 0
 
@@ -8882,18 +9506,26 @@ class _PlayerVisit:
                 None
                 if successful
                 else (
-                    "room_closed_before_arrival"
-                    if self.ended_by_freeze
-                    else "left_before_arrival"
+                    "network_error_before_arrival"
+                    if self.ended_by_network_error
+                    else (
+                        "room_closed_before_arrival"
+                        if self.ended_by_freeze
+                        else "left_before_arrival"
+                    )
                 )
             ),
             "failure_reason_text": (
                 None
                 if successful
                 else (
-                    "房间关闭时仍未抵达"
-                    if self.ended_by_freeze
-                    else "到达前返回"
+                    "网络连接错误时仍未抵达"
+                    if self.ended_by_network_error
+                    else (
+                        "房间关闭时仍未抵达"
+                        if self.ended_by_freeze
+                        else "到达前返回"
+                    )
                 )
             ),
             "incoming": local_time(self.incoming_at_utc),
@@ -8902,15 +9534,20 @@ class _PlayerVisit:
             "loading_seconds": loading_seconds,
             "room_seconds": room_seconds,
             "ended_by_room_freeze": self.ended_by_freeze,
+            "ended_by_network_error": self.ended_by_network_error,
             "available_reward_tasks": min(3, self.available_rewards),
             "completed_reward_tasks": min(3, self.completed_rewards),
             "description": (
                 f"{self.player_name}，加载所用时长{loading_seconds}秒，"
                 "进入失败（"
                 + (
-                    "房间关闭时仍未抵达"
-                    if self.ended_by_freeze
-                    else "到达前返回"
+                    "网络连接错误时仍未抵达"
+                    if self.ended_by_network_error
+                    else (
+                        "房间关闭时仍未抵达"
+                        if self.ended_by_freeze
+                        else "到达前返回"
+                    )
                 )
                 + "）"
                 if not successful
@@ -9248,9 +9885,13 @@ class RoomPlayerTracker:
             players=player_progress,
         )
 
-    def mark_room_disconnected(self) -> None:
+    def mark_room_disconnected(
+        self,
+        reopen_reason: str = "normal_reopen",
+    ) -> None:
         """Freeze and close the room exactly when the first HOME is sent."""
         frozen_at_utc = datetime.now(timezone.utc)
+        network_error_reopen = reopen_reason == "network_connection_error"
         with self._lock:
             if self._showing_disconnected_room:
                 return
@@ -9261,6 +9902,7 @@ class RoomPlayerTracker:
             for visit in self._active_visits.values():
                 visit.ended_at_utc = frozen_at_utc
                 visit.ended_by_freeze = True
+                visit.ended_by_network_error = network_error_reopen
                 self._round_visits.append(visit)
                 if visit.arrived_at_utc is None:
                     frozen_failures += 1
@@ -9278,14 +9920,30 @@ class RoomPlayerTracker:
             self._run_counter.record_player_entry_failures(
                 frozen_failures,
                 player_names=tuple(frozen_failure_names),
-                reason="room_closed_before_arrival",
+                reason=(
+                    "network_error_before_arrival"
+                    if network_error_reopen
+                    else "room_closed_before_arrival"
+                ),
             )
         reopen_index = self._archive.record_room_reopen_summary(
             visits,
             frozen_at_utc,
             round_player_entries,
             round_player_entry_failures,
+            reopen_reason=reopen_reason,
+            network_error_player_names=(
+                tuple(frozen_failure_names)
+                if network_error_reopen
+                else ()
+            ),
         )
+        if network_error_reopen and frozen_failure_names:
+            _timestamped_log(
+                "网络连接错误时尚未抵达的玩家："
+                + "、".join(frozen_failure_names)
+                + "；已归入网络连接错误，不计入普通重开冻结分类。"
+            )
         _timestamped_log(
             "重开第一个HOME即将按下：已冻结断开时房间内玩家列表"
             f"并结算今日第{reopen_index or '?'}次重开。"
@@ -9431,6 +10089,25 @@ class PokopiaDetector:
             .astype(np.float32)
         )
         self._network_error_streak = 0
+        self._reopen_stage_features: dict[
+            str,
+            tuple[tuple[float, float, float, float], np.ndarray],
+        ] = {}
+        reopen_feature_size = int(np.prod(REOPEN_STAGE_FEATURE_SHAPE))
+        for stage_name, (roi, encoded) in REOPEN_STAGE_FEATURES.items():
+            raw_feature = zlib.decompress(base64.b64decode(encoded))
+            feature = np.frombuffer(raw_feature, dtype=np.uint8)
+            if feature.size != reopen_feature_size:
+                raise RuntimeError(
+                    f"重开阶段内嵌特征损坏：{stage_name}，"
+                    f"长度={feature.size}"
+                )
+            self._reopen_stage_features[stage_name] = (
+                roi,
+                feature.reshape(REOPEN_STAGE_FEATURE_SHAPE).astype(np.float32),
+            )
+        self._reopen_stage_candidate = "INVALID"
+        self._reopen_stage_candidate_frames = 0
 
     def _match(
         self,
@@ -9610,6 +10287,62 @@ class PokopiaDetector:
             self._network_error_streak = 0
         return self._network_error_streak >= NETWORK_ERROR_CONFIRM_FRAMES
 
+    def _detect_reopen_stage(self, frame: np.ndarray) -> str:
+        best_stage = "INVALID"
+        best_score = -1.0
+        feature_width = REOPEN_STAGE_FEATURE_SHAPE[1]
+        feature_height = REOPEN_STAGE_FEATURE_SHAPE[0]
+        for stage_name, (roi, reference) in self._reopen_stage_features.items():
+            crop = _fractional_crop(frame, roi)
+            if stage_name == "OVERWRITE":
+                # Use colour as a required gate before comparing structure.
+                # This explicitly rejects the supplied disabled
+                # “无法覆盖数据” screen instead of accepting its nearly
+                # identical glyph/layout through grayscale correlation.
+                blue = crop[:, :, 0].astype(np.int16)
+                green = crop[:, :, 1].astype(np.int16)
+                red = crop[:, :, 2].astype(np.int16)
+                bright_orange_red = (
+                    (red >= 150)
+                    & ((red - green) >= 80)
+                    & (green <= 100)
+                    & (blue <= 80)
+                )
+                if (
+                    float(np.count_nonzero(bright_orange_red))
+                    / float(bright_orange_red.size)
+                    < REOPEN_OVERWRITE_MIN_BRIGHT_RED_RATIO
+                ):
+                    continue
+            current = cv2.resize(
+                cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY),
+                (feature_width, feature_height),
+                interpolation=cv2.INTER_AREA,
+            ).astype(np.float32)
+            score = float(
+                cv2.matchTemplate(
+                    current,
+                    reference,
+                    cv2.TM_CCOEFF_NORMED,
+                )[0, 0]
+            )
+            if np.isfinite(score) and score > best_score:
+                best_stage = stage_name
+                best_score = score
+
+        if best_score < REOPEN_STAGE_MIN_CORRELATION:
+            self._reopen_stage_candidate = "INVALID"
+            self._reopen_stage_candidate_frames = 0
+            return "INVALID"
+        if best_stage == self._reopen_stage_candidate:
+            self._reopen_stage_candidate_frames += 1
+        else:
+            self._reopen_stage_candidate = best_stage
+            self._reopen_stage_candidate_frames = 1
+        if self._reopen_stage_candidate_frames < REOPEN_STAGE_CONFIRM_FRAMES:
+            return "INVALID"
+        return best_stage
+
     def detect(self, frame: np.ndarray) -> PokopiaDetection:
         if frame is None or frame.size == 0 or frame.ndim != 3:
             return PokopiaDetection(
@@ -9648,6 +10381,7 @@ class PokopiaDetector:
             ),
             stamp=self._detect_stamp(frame),
             network_error=self._detect_network_error(frame),
+            reopen_stage=self._detect_reopen_stage(frame),
         )
 
 
@@ -11548,6 +12282,7 @@ class CodeRecognizer:
         self._lock = threading.Lock()
         self._archive = archive
         self._code = ""
+        self._code_unknown = False
         self._last_reported_code = ""
         self._revision = 0
         self._last_change_monotonic: float | None = None
@@ -11563,7 +12298,9 @@ class CodeRecognizer:
         self._last_failure_log = 0.0
         self._ocr_round_active = False
         self._ocr_round_macro_key = 0
+        self._ocr_round_failure_count = 0
         self._ocr_round_error_screenshot_recorded = False
+        self._blocked_until_code_panel_absent = False
         self._latest_ocr_diagnostics: tuple[str, ...] = ()
 
     def snapshot(self) -> str:
@@ -11574,16 +12311,26 @@ class CodeRecognizer:
         with self._lock:
             return self._revision
 
+    def is_unknown(self) -> bool:
+        with self._lock:
+            return self._code_unknown
+
+    def note_code_panel_absent(self) -> None:
+        """Permit OCR for the next CODE panel after an unknown-code fallback."""
+        with self._lock:
+            self._blocked_until_code_panel_absent = False
+
     def reset_timer_anchor(self) -> None:
         """Start both Macro1 watchdog windows without recording a CODE."""
         with self._lock:
             self._last_change_monotonic = time.monotonic()
 
     def begin_ocr_round(self, macro_key: int) -> None:
-        """Allow one invalid-six-character screenshot for this restart."""
+        """Start one ten-attempt CODE recognition window for this restart."""
         with self._lock:
             self._ocr_round_active = True
             self._ocr_round_macro_key = int(macro_key)
+            self._ocr_round_failure_count = 0
             self._ocr_round_error_screenshot_recorded = False
             self._latest_ocr_diagnostics = ()
 
@@ -11685,6 +12432,7 @@ class CodeRecognizer:
         with self._lock:
             if (
                 self._in_flight
+                or self._blocked_until_code_panel_absent
                 or now - self._last_attempt < CODE_OCR_RETRY_SECONDS
             ):
                 return
@@ -11710,6 +12458,7 @@ class CodeRecognizer:
         should_report = False
         previous_code = ""
         failure_count = 0
+        round_failure_count = 0
         should_log_failure = False
         should_archive_failure = False
         archive: StampCodeArchive | None = None
@@ -11758,6 +12507,7 @@ class CodeRecognizer:
                 if code:
                     self._failure_count = 0
                     self._code = code
+                    self._code_unknown = False
                     if code != self._last_reported_code:
                         self._last_reported_code = code
                         self._revision += 1
@@ -11769,8 +12519,13 @@ class CodeRecognizer:
                 else:
                     self._failure_count += 1
                     failure_count = self._failure_count
+                    if self._ocr_round_active:
+                        self._ocr_round_failure_count += 1
+                        round_failure_count = self._ocr_round_failure_count
                     if (
                         self._ocr_round_active
+                        and self._ocr_round_failure_count
+                        >= CODE_OCR_UNKNOWN_AFTER_FAILURES
                         and not self._ocr_round_error_screenshot_recorded
                     ):
                         self._ocr_round_error_screenshot_recorded = True
@@ -11779,6 +12534,8 @@ class CodeRecognizer:
                         archive_macro_key = self._ocr_round_macro_key
                         archive_frame = source_frame
                         archive_detection = detection
+                        self._ocr_round_active = False
+                        self._blocked_until_code_panel_absent = True
                     now = time.monotonic()
                     if (
                         now - self._last_failure_log
@@ -11789,20 +12546,38 @@ class CodeRecognizer:
                 self._in_flight = False
             if should_archive_failure and archive is not None:
                 archive.record_error(
-                    "code_ocr_not_six_characters",
+                    "code_ocr_ten_failures_unknown",
                     macro_key=archive_macro_key,
                     retained_code=previous_code,
-                    failure_count=failure_count,
+                    failure_count=round_failure_count,
                     frame=archive_frame,
                     detection=archive_detection,
                     ocr_results=tuple(ocr_diagnostics),
                 )
+            if should_archive_failure:
+                # Publish the unknown revision only after its screenshot has
+                # finished writing.  The local server can therefore never
+                # attach an older unknown round's image to this revision.
+                with self._lock:
+                    self._code = ""
+                    self._code_unknown = True
+                    self._last_reported_code = ""
+                    self._revision += 1
+                    self._last_change_monotonic = time.monotonic()
+                    self._latest_frame = source_frame
+                    self._latest_detection = detection
             if should_log_failure:
                 retained = previous_code or "<空>"
-                _timestamped_log(
-                    "CODE面板已识别，但四种OCR方案均未得到六位码；"
-                    f"连续失败{failure_count}次，保留CODE {retained}并继续重试。"
-                )
+                if should_archive_failure:
+                    _timestamped_log(
+                        "CODE面板连续10次未得到六码；已保存本轮唯一error截图，"
+                        f"不再沿用旧CODE {retained}，改以未知CODE继续正常流程。"
+                    )
+                else:
+                    _timestamped_log(
+                        "CODE面板已识别，但四种OCR方案均未得到六位码；"
+                        f"连续失败{failure_count}次，保留CODE {retained}并继续重试。"
+                    )
                 _timestamped_log(
                     "CODE OCR原始结果：" + "｜".join(ocr_diagnostics)
                 )
@@ -11964,6 +12739,12 @@ def render_watchdog_overlay(
         (NETWORK_ERROR_CLOSE_ROI, detection.network_error),
         (PLAYER_CONNECTION_ICON_ROI, player_icon_visible),
         (PLAYER_NOTIFICATION_ROI, player_notification_visible),
+        *((
+            (
+                REOPEN_STAGE_FEATURES[detection.reopen_stage][0],
+                True,
+            ),
+        ) if detection.reopen_stage in REOPEN_STAGE_FEATURES else ()),
     )
     for roi, active in roi_states:
         _draw_roi(display, roi, active)
@@ -11997,6 +12778,7 @@ def render_watchdog_overlay(
         f"TASKS COMPLETED: {min(3, max(0, completed_tasks))}/3",
         f"STAMP: {detection.stamp}",
         f"NETWORK ERROR: {'TRUE' if detection.network_error else 'FALSE'}",
+        f"REOPEN STAGE: {detection.reopen_stage}",
         (
             "UPDATES  "
             f"TODAY:{run_count.daily_runs}  "
@@ -12405,6 +13187,7 @@ def main() -> int:
                     )
             else:
                 code_panel_detected_since = None
+                code_recognizer.note_code_panel_absent()
             current_code_revision = code_recognizer.revision()
             if current_code_revision != room_code_revision:
                 room_code_revision = current_code_revision
@@ -12418,9 +13201,7 @@ def main() -> int:
             if now_web_update - last_web_update_monotonic >= 0.25:
                 last_web_update_monotonic = now_web_update
                 timer_active = context.web_phase_key() == "stamp_cycle"
-                web_publisher.update(
-                    code=code_recognizer.snapshot(),
-                    code_revision=current_code_revision,
+                web_fields = dict(
                     macro_key=context.current_macro_key(),
                     operation_locked=context.operation_locked(),
                     room_disconnected=room_disconnected,
@@ -12469,10 +13250,24 @@ def main() -> int:
                         "network_error": detection.network_error,
                     },
                 )
+                # While the macro worker is finishing the new screenshot and
+                # announcement, keep the prior public CODE/status together.
+                # set_web_code_ready() publishes the new tuple atomically.
+                if context.web_phase_key() != "waiting_code_ocr":
+                    web_fields.update(
+                        code=code_recognizer.snapshot(),
+                        code_unknown=code_recognizer.is_unknown(),
+                        code_revision=current_code_revision,
+                    )
+                web_publisher.update(**web_fields)
             display = render_watchdog_overlay(
                 snapshot.frame,
                 detection,
-                code_recognizer.snapshot(),
+                (
+                    "未知"
+                    if code_recognizer.is_unknown()
+                    else code_recognizer.snapshot()
+                ),
                 count_snapshot,
                 timer_elapsed,
                 visual_state.completed_tasks(),

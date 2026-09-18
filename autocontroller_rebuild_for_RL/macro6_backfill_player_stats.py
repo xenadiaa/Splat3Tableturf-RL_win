@@ -60,12 +60,14 @@ def _collect_reopen_summaries() -> tuple[
     PlayerCounts,
     PlayerCounts,
     PlayerCounts,
+    PlayerCounts,
     int,
 ]:
     visits: PlayerCounts = {}
     tasks: PlayerCounts = {}
     returned_failures: PlayerCounts = {}
     room_closed_failures: PlayerCounts = {}
+    network_error_failures: PlayerCounts = {}
     file_count = 0
     for path in sorted(ARCHIVE_ROOT.glob("STAMP_*/PLAYERS_*.jsonl")):
         day = _date_from_folder(path)
@@ -83,11 +85,13 @@ def _collect_reopen_summaries() -> tuple[
                     continue
                 name = str(visit.get("player_name", "")).strip()
                 if visit.get("result") == "entry_failed":
-                    target = (
-                        room_closed_failures
-                        if bool(visit.get("ended_by_room_freeze", False))
-                        else returned_failures
-                    )
+                    failure_reason = str(visit.get("failure_reason") or "")
+                    if failure_reason == "network_error_before_arrival":
+                        target = network_error_failures
+                    elif bool(visit.get("ended_by_room_freeze", False)):
+                        target = room_closed_failures
+                    else:
+                        target = returned_failures
                     _increment(target, day, name, 1)
                     continue
                 if visit.get("result") != "entered":
@@ -114,11 +118,13 @@ def _collect_reopen_summaries() -> tuple[
         tasks,
         returned_failures,
         room_closed_failures,
+        network_error_failures,
         file_count,
     )
 
 
 def _collect_event_logs() -> tuple[
+    PlayerCounts,
     PlayerCounts,
     PlayerCounts,
     PlayerCounts,
@@ -129,6 +135,7 @@ def _collect_event_logs() -> tuple[
     tasks: PlayerCounts = {}
     returned_failures: PlayerCounts = {}
     room_closed_failures: PlayerCounts = {}
+    network_error_failures: PlayerCounts = {}
     file_count = 0
 
     for path in sorted(ARCHIVE_ROOT.glob("STAMP_*/STAMP_*.jsonl")):
@@ -147,6 +154,8 @@ def _collect_event_logs() -> tuple[
                     _increment(returned_failures, day, name, 1)
                 elif failure_reason == "room_closed_before_arrival":
                     _increment(room_closed_failures, day, name, 1)
+                elif failure_reason == "network_error_before_arrival":
+                    _increment(network_error_failures, day, name, 1)
                 return
             _increment(visits, day, name, 1)
             _increment(tasks, day, name, int(visit.get("tasks", 0)))
@@ -163,7 +172,11 @@ def _collect_event_logs() -> tuple[
             if status == "round_end_before_reopen" or (
                 not status and str(record.get("code", "")).strip()
             ):
-                finish_all("room_closed_before_arrival")
+                finish_all(
+                    "network_error_before_arrival"
+                    if record.get("reason") == "network_connection_error"
+                    else "room_closed_before_arrival"
+                )
                 continue
 
             if status == "player_room_status":
@@ -240,6 +253,7 @@ def _collect_event_logs() -> tuple[
         tasks,
         returned_failures,
         room_closed_failures,
+        network_error_failures,
         file_count,
     )
 
@@ -320,6 +334,7 @@ def main() -> int:
         summary_tasks,
         summary_returned_failures,
         summary_room_closed_failures,
+        summary_network_error_failures,
         summary_files,
     ) = _collect_reopen_summaries()
     (
@@ -327,6 +342,7 @@ def main() -> int:
         event_tasks,
         event_returned_failures,
         event_room_closed_failures,
+        event_network_error_failures,
         event_files,
     ) = _collect_event_logs()
     daily_visits = _merge_max(
@@ -353,11 +369,19 @@ def main() -> int:
         summary_room_closed_failures,
         event_room_closed_failures,
     )
+    daily_network_error_failures = _merge_max(
+        _nested_counts(
+            payload.get("daily_player_network_error_before_arrival")
+        ),
+        summary_network_error_failures,
+        event_network_error_failures,
+    )
 
     total_visits = _totals(daily_visits)
     total_tasks = _totals(daily_tasks)
     total_returned_failures = _totals(daily_returned_failures)
     total_room_closed_failures = _totals(daily_room_closed_failures)
+    total_network_error_failures = _totals(daily_network_error_failures)
     existing_daily_entries = payload.get("daily_player_entries", {})
     if not isinstance(existing_daily_entries, dict):
         existing_daily_entries = {}
@@ -379,15 +403,18 @@ def main() -> int:
         set(existing_daily_failures)
         | set(daily_returned_failures)
         | set(daily_room_closed_failures)
+        | set(daily_network_error_failures)
     )
     for day in failure_days:
         try:
             existing = max(0, int(existing_daily_failures.get(day, 0)))
         except (TypeError, ValueError):
             existing = 0
-        categorized = sum(
-            daily_returned_failures.get(str(day), {}).values()
-        ) + sum(daily_room_closed_failures.get(str(day), {}).values())
+        categorized = (
+            sum(daily_returned_failures.get(str(day), {}).values())
+            + sum(daily_room_closed_failures.get(str(day), {}).values())
+            + sum(daily_network_error_failures.get(str(day), {}).values())
+        )
         daily_failures[str(day)] = max(existing, categorized)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
@@ -397,7 +424,7 @@ def main() -> int:
     report_path = ARCHIVE_ROOT / f"PLAYER_STATS_BACKFILL_{timestamp}.json"
     temporary_path = STATS_PATH.with_suffix(STATS_PATH.suffix + ".tmp")
 
-    payload["version"] = max(8, int(payload.get("version", 0)))
+    payload["version"] = max(9, int(payload.get("version", 0)))
     payload["daily_player_entries"] = dict(sorted(daily_entries.items()))
     payload["total_player_entries"] = max(
         int(payload.get("total_player_entries", 0)),
@@ -426,6 +453,12 @@ def main() -> int:
     payload["total_player_room_closed_before_arrival"] = (
         total_room_closed_failures
     )
+    payload["daily_player_network_error_before_arrival"] = (
+        daily_network_error_failures
+    )
+    payload["total_player_network_error_before_arrival"] = (
+        total_network_error_failures
+    )
     payload["player_statistics_backfill"] = {
         "completed_at_utc": datetime.now(timezone.utc)
         .isoformat(timespec="seconds")
@@ -440,6 +473,9 @@ def main() -> int:
         ),
         "recovered_room_closed_before_arrival": _sum_counts(
             daily_room_closed_failures
+        ),
+        "recovered_network_error_before_arrival": _sum_counts(
+            daily_network_error_failures
         ),
         "backup": backup_path.name,
         "report": report_path.name,
@@ -457,6 +493,12 @@ def main() -> int:
         ),
         "total_player_room_closed_before_arrival": (
             total_room_closed_failures
+        ),
+        "daily_player_network_error_before_arrival": (
+            daily_network_error_failures
+        ),
+        "total_player_network_error_before_arrival": (
+            total_network_error_failures
         ),
     }
 
@@ -486,6 +528,10 @@ def main() -> int:
     print(
         "补全后房间关闭时未抵达："
         f"{_sum_counts(daily_room_closed_failures)} 次"
+    )
+    print(
+        "补全后网络连接错误时未抵达："
+        f"{_sum_counts(daily_network_error_failures)} 次"
     )
     print(f"原统计备份：{backup_path}")
     print(f"补全报告：{report_path}")

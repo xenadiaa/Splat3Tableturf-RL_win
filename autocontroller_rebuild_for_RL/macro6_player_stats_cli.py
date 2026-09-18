@@ -169,11 +169,12 @@ def _show_failure_ranking(
     title: str,
     returned: dict[str, int],
     room_closed: dict[str, int],
+    network_error: dict[str, int],
     aggregate_failure_count: int,
 ) -> None:
     print()
     print(title)
-    combined = _combine_player_counts(returned, room_closed)
+    combined = _combine_player_counts(returned, room_closed, network_error)
     ranking = _sorted_player_counts(combined)
     if not ranking:
         print("（暂无可归属到玩家的记录）")
@@ -183,7 +184,9 @@ def _show_failure_ranking(
                 f"{player_name}，进入失败{total}次"
                 f"（到达前返回 {returned.get(player_name, 0)}次，"
                 "房间关闭时未抵达 "
-                f"{room_closed.get(player_name, 0)}次）"
+                f"{room_closed.get(player_name, 0)}次，"
+                "网络连接错误时未抵达 "
+                f"{network_error.get(player_name, 0)}次）"
             )
     unattributed = max(0, int(aggregate_failure_count) - sum(combined.values()))
     if unattributed:
@@ -285,6 +288,12 @@ def _show_range(
         start_day,
         end_day,
     )
+    network_error_failures = _sum_nested_range(
+        payload,
+        "daily_player_network_error_before_arrival",
+        start_day,
+        end_day,
+    )
 
     print(title)
     print(
@@ -309,6 +318,7 @@ def _show_range(
         "玩家进入失败次数（按次数从高到低）：",
         returned_failures,
         room_closed_failures,
+        network_error_failures,
         failures,
     )
     return 0
@@ -470,6 +480,10 @@ def _show_one_day(payload: dict[str, object]) -> int:
         payload,
         "daily_player_room_closed_before_arrival",
     ).get(day, {})
+    daily_network_error_failures = _nested_counter_map(
+        payload,
+        "daily_player_network_error_before_arrival",
+    ).get(day, {})
     print()
     print(f"业务日期：{day}")
     print(f"统计范围：北京时间 {day} 05:00 至次日 04:59:59")
@@ -489,6 +503,7 @@ def _show_one_day(payload: dict[str, object]) -> int:
         "玩家进入失败次数（当日总计，按次数从高到低）：",
         daily_returned_failures,
         daily_room_closed_failures,
+        daily_network_error_failures,
         failures.get(day, 0),
     )
     return 0
@@ -539,6 +554,10 @@ def _show_all_days(
         payload,
         "total_player_room_closed_before_arrival",
     )
+    total_network_error_failures = _counter_map(
+        payload,
+        "total_player_network_error_before_arrival",
+    )
     if selection in {"1", "3"}:
         _show_player_ranking(
             "玩家来访次数（历史总计，按次数从高到低）：",
@@ -556,6 +575,7 @@ def _show_all_days(
             "玩家进入失败次数（历史总计，按次数从高到低）：",
             total_returned_failures,
             total_room_closed_failures,
+            total_network_error_failures,
             int(payload.get("total_player_entry_failures", 0)),
         )
     return 0

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import argparse
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -111,6 +113,7 @@ class EdgeUploader:
         self._last_live_upload = 0.0
         self._last_screenshot_revision = -1
         self._last_screenshot_relative = ""
+        self._timer_deadline_epoch: int | None = None
         checkpoint = _load_json(SYNC_PATH, {})
         self._day_hashes = checkpoint.get("day_hashes", {}) if isinstance(checkpoint, dict) else {}
         if not isinstance(self._day_hashes, dict):
@@ -169,14 +172,60 @@ class EdgeUploader:
         print(f"边缘截图已更新：CODE={code or '<空>'}，revision={revision}", flush=True)
         return True
 
-    def publish_live_once(self) -> None:
+    def _public_live_projection(self, live: dict, screenshot_ready: bool) -> dict:
+        """Return the event-driven public state used for hashing and upload.
+
+        Local heartbeat timestamps, recognition-frame details and ticking timer
+        counters are intentionally omitted.  They used to make an unchanged
+        room look different every two seconds and therefore forced a cloud
+        write on every local poll.
+        """
+        public_live = copy.deepcopy(live)
+        for key in ("updated_at", "updated_at_epoch", "stale_seconds"):
+            public_live.pop(key, None)
+        public_live.pop("detection", None)
+
+        timer = public_live.get("timer")
+        if isinstance(timer, dict):
+            active = bool(timer.get("active"))
+            limit_seconds = max(0, int(timer.get("limit_seconds") or 0))
+            remaining_raw = timer.get("remaining_seconds")
+            try:
+                remaining = max(0.0, float(remaining_raw))
+            except (TypeError, ValueError):
+                remaining = None
+            if active and remaining is not None:
+                candidate = round(time.time() + remaining)
+                if (
+                    self._timer_deadline_epoch is None
+                    or candidate < self._timer_deadline_epoch - 3
+                    or (
+                        candidate > self._timer_deadline_epoch + 3
+                        and remaining >= max(0, limit_seconds - 5)
+                    )
+                ):
+                    self._timer_deadline_epoch = candidate
+            else:
+                self._timer_deadline_epoch = None
+            public_live["timer"] = {
+                "active": active,
+                "limit_seconds": limit_seconds,
+                "deadline_epoch": self._timer_deadline_epoch,
+            }
+
+        public_live["screenshot_url"] = (
+            "/media/current-code.png" if screenshot_ready else None
+        )
+        return public_live
+
+    def publish_live_once(self, *, publish_screenshot: bool = True) -> None:
         live = self._local_json("/api/live")
-        screenshot_ready = self._publish_screenshot(live)
-        public_live = dict(live)
-        if screenshot_ready:
-            public_live["screenshot_url"] = "/media/current-code.png"
-        else:
-            public_live["screenshot_url"] = None
+        screenshot_ready = (
+            self._publish_screenshot(live)
+            if publish_screenshot
+            else bool(live.get("screenshot_url"))
+        )
+        public_live = self._public_live_projection(live, screenshot_ready)
         encoded = _stable_bytes(public_live)
         digest = hashlib.sha256(encoded).hexdigest()
         now = time.monotonic()
@@ -230,6 +279,13 @@ class EdgeUploader:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--once-no-media",
+        action="store_true",
+        help="立即上传一次实时状态，但不重复上传CODE截图。",
+    )
+    args = parser.parse_args()
     if not CONFIG_PATH.is_file():
         print("尚未配置Cloudflare边缘上传；本地网页和Macro6不受影响。")
         return 2
@@ -238,7 +294,12 @@ def main() -> int:
     except Exception as exc:
         print(f"边缘上传配置无效：{exc}")
         return 2
-    return EdgeUploader(config).run()
+    uploader = EdgeUploader(config)
+    if args.once_no_media:
+        uploader.publish_live_once(publish_screenshot=False)
+        print("边缘最终状态已同步。", flush=True)
+        return 0
+    return uploader.run()
 
 
 if __name__ == "__main__":

@@ -25,6 +25,9 @@ const state = {
   lastRequestAt: new Map(),
   liveSocket: null,
   reconnectTimer: null,
+  reconnectDelay: 2000,
+  communityData: null,
+  communityExpiryTimer: null,
   queryGeneration: 0,
   rankingGeneration: 0,
   goodPeriod: "all",
@@ -181,10 +184,13 @@ function renderLive(data) {
   $("restart-summary").textContent = announcement.restart_summary || "重开耗时尚未记录";
   $("announcement-text").textContent = announcement.text || "尚未生成开放播报";
   $("deadline-label").textContent = announcement.deadline ? `预计至 ${announcement.deadline}` : "等待轮次开放";
+  const timerDeadline = Number(data.timer?.deadline_epoch);
   const timerRemaining = Number(data.timer?.remaining_seconds);
-  state.countdownRemaining = data.timer?.active && Number.isFinite(timerRemaining)
-    ? Math.max(0, timerRemaining)
-    : null;
+  state.countdownRemaining = data.timer?.active && Number.isFinite(timerDeadline) && timerDeadline > 0
+    ? Math.max(0, timerDeadline - Date.now() / 1000)
+    : data.timer?.active && Number.isFinite(timerRemaining)
+      ? Math.max(0, timerRemaining)
+      : null;
   state.countdownSampledAt = performance.now();
 
   renderPlayers(Array.isArray(data.players) ? data.players : []);
@@ -215,7 +221,9 @@ function renderLive(data) {
 
 function updateCountdown() {
   const receivedAt = Number(state.live?.edge_received_at_epoch || state.live?.updated_at_epoch || 0);
-  const offlineAfter = number(state.live?.offline_after_seconds) || 30;
+  const offlineAfter = number(state.live?.offline_after_seconds) || 420;
+  const stale = receivedAt ? Math.max(0, Math.round(Date.now() / 1000 - receivedAt)) : null;
+  $("last-updated").textContent = stale == null ? "尚未收到心跳" : stale <= 2 ? "刚刚更新" : `${stale}秒前更新`;
   if (receivedAt && Date.now() / 1000 - receivedAt > offlineAfter && state.live?.status?.key !== "offline") {
     state.live.status = { key: "offline", label: "离线" };
     state.live.phase = { key: "offline", label: "Windows状态心跳已中断，当前内容可能过期" };
@@ -269,9 +277,15 @@ function connectLiveStream() {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(`${protocol}//${location.host}/api/stream`);
   state.liveSocket = socket;
+  socket.addEventListener("open", () => { state.reconnectDelay = 2000; });
   socket.addEventListener("message", (event) => {
     try {
-      renderLive(JSON.parse(event.data));
+      const payload = JSON.parse(event.data);
+      if (payload?.event === "community_rooms") {
+        renderCommunityRooms(payload.data || {});
+        return;
+      }
+      renderLive(payload);
       updateCountdown();
     } catch {
       // A malformed update is ignored; the next server snapshot will replace it.
@@ -279,7 +293,8 @@ function connectLiveStream() {
   });
   socket.addEventListener("close", () => {
     if (state.liveSocket === socket) state.liveSocket = null;
-    state.reconnectTimer = setTimeout(connectLiveStream, 2000);
+    state.reconnectTimer = setTimeout(connectLiveStream, state.reconnectDelay);
+    state.reconnectDelay = Math.min(60_000, state.reconnectDelay * 2);
   });
   socket.addEventListener("error", () => socket.close());
 }
@@ -439,7 +454,7 @@ async function feedbackRoom(room, action) {
       method: "POST", body: { action },
     });
     showToast(result.message || "反馈已记录");
-    await loadCommunityRooms();
+    if (result.community) renderCommunityRooms(result.community);
   } catch (error) { showToast(error.message); }
 }
 
@@ -449,22 +464,27 @@ async function deleteRoom(room) {
   if (!ownerToken) return;
   if (!confirm("真的要删除吗？删除后不计入好人榜统计哦；如果确实是输错了再删。")) return;
   try {
-    await fetchJSON(`/api/community/rooms/${room.id}`, {
+    const result = await fetchJSON(`/api/community/rooms/${room.id}`, {
       method: "DELETE", body: { owner_token: ownerToken },
     });
     delete owners[room.id];
     localStorage.setItem("pokopia-community-owners", JSON.stringify(owners));
     showToast("已删除，不计入好人榜");
-    await loadCommunityRooms();
+    if (result.community) renderCommunityRooms(result.community);
   } catch (error) { showToast(error.message); }
 }
 
 function renderCommunityRooms(data) {
-  const openCount = Number.isFinite(Number(data.open_count))
-    ? Math.max(0, number(data.open_count))
-    : (Array.isArray(data.rooms)
-      ? data.rooms.filter((room) => !room.full && !room.invalid).length
-      : 0);
+  state.communityData = data;
+  clearTimeout(state.communityExpiryTimer);
+  const now = Date.now() / 1000;
+  const sourceRooms = Array.isArray(data.rooms) ? data.rooms : [];
+  const rooms = sourceRooms.filter((room) => {
+    if (number(room.expires_at) && number(room.expires_at) <= now) return false;
+    if (number(room.invalid_hides_at) && number(room.invalid_hides_at) <= now) return false;
+    return true;
+  });
+  const openCount = rooms.filter((room) => !room.full && !room.invalid).length;
   const countBadge = $("community-open-count");
   countBadge.textContent = openCount > 999 ? "999+" : String(openCount);
   countBadge.setAttribute("aria-label", `当前有${openCount}辆车正在开放`);
@@ -477,48 +497,57 @@ function renderCommunityRooms(data) {
   $("community-submit").disabled = !data.writes_enabled;
   const root = $("community-rooms");
   root.innerHTML = "";
-  const rooms = Array.isArray(data.rooms) ? data.rooms : [];
   if (!rooms.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
     empty.textContent = "当前没有其它玩家发布的开门信息";
     root.append(empty);
-    return;
-  }
-  const owners = communityOwners();
-  rooms.forEach((room) => {
-    const card = document.createElement("article"); card.className = "community-room";
-    const header = document.createElement("header");
-    const code = document.createElement("div"); code.className = "community-code"; code.textContent = `CODE：${room.code}`;
-    const badges = document.createElement("div"); badges.className = "community-badges";
-    badges.append(communityBadge(roomTypeLabel(room.room_type)));
-    if (room.full) badges.append(communityBadge("已满", "full"));
-    if (room.invalid_pending) badges.append(communityBadge("失效待核验", "pending"));
-    if (room.invalid) badges.append(communityBadge("失效", "invalid"));
-    if (!room.full && !room.invalid && !room.invalid_pending) badges.append(communityBadge("开放中"));
-    header.append(code, badges);
-    const meta = document.createElement("p"); meta.className = "community-room-meta";
-    meta.textContent = `开门人：${room.player_name}（${beijingTime(room.created_at)}开）`;
-    const description = document.createElement("p"); description.className = "community-room-description";
-    description.textContent = room.description ? `描述：${room.description}` : "描述：未填写";
-    const actions = document.createElement("div"); actions.className = "community-actions";
-    if (data.writes_enabled) {
-      if (room.room_type === "stamp") {
-        if (!room.full) actions.append(communityAction("梦幻章满", () => feedbackRoom(room, "full")));
-        else actions.append(communityAction("已满有误", () => feedbackRoom(room, "full_wrong")));
+  } else {
+    const owners = communityOwners();
+    rooms.forEach((room) => {
+      const card = document.createElement("article"); card.className = "community-room";
+      const header = document.createElement("header");
+      const code = document.createElement("div"); code.className = "community-code"; code.textContent = `CODE：${room.code}`;
+      const badges = document.createElement("div"); badges.className = "community-badges";
+      badges.append(communityBadge(roomTypeLabel(room.room_type)));
+      if (room.full) badges.append(communityBadge("已满", "full"));
+      if (room.invalid_pending) badges.append(communityBadge("失效待核验", "pending"));
+      if (room.invalid) badges.append(communityBadge("失效", "invalid"));
+      if (!room.full && !room.invalid && !room.invalid_pending) badges.append(communityBadge("开放中"));
+      header.append(code, badges);
+      const meta = document.createElement("p"); meta.className = "community-room-meta";
+      meta.textContent = `开门人：${room.player_name}（${beijingTime(room.created_at)}开）`;
+      const description = document.createElement("p"); description.className = "community-room-description";
+      description.textContent = room.description ? `描述：${room.description}` : "描述：未填写";
+      const actions = document.createElement("div"); actions.className = "community-actions";
+      if (data.writes_enabled) {
+        if (room.room_type === "stamp") {
+          if (!room.full) actions.append(communityAction("梦幻章满", () => feedbackRoom(room, "full")));
+          else actions.append(communityAction("已满有误", () => feedbackRoom(room, "full_wrong")));
+        }
+        if (!room.invalid) actions.append(communityAction("上报失效", () => feedbackRoom(room, "invalid"), true));
+        else actions.append(communityAction("失效有误", () => feedbackRoom(room, "invalid_wrong")));
+        if (room.invalid_pending) actions.append(communityAction("失效有误", () => feedbackRoom(room, "invalid_wrong")));
       }
-      if (!room.invalid) actions.append(communityAction("上报失效", () => feedbackRoom(room, "invalid"), true));
-      else actions.append(communityAction("失效有误", () => feedbackRoom(room, "invalid_wrong")));
-      if (room.invalid_pending) actions.append(communityAction("失效有误", () => feedbackRoom(room, "invalid_wrong")));
-    }
-    if (owners[room.id]) actions.append(communityAction("哎呀输错了！我删！", () => deleteRoom(room), true));
-    card.append(header, meta, description, actions);
-    root.append(card);
-  });
+      if (owners[room.id]) actions.append(communityAction("哎呀输错了！我删！", () => deleteRoom(room), true));
+      card.append(header, meta, description, actions);
+      root.append(card);
+    });
+  }
+  const expiryCandidates = rooms.flatMap((room) => [
+    number(room.expires_at), number(room.invalid_hides_at),
+  ]).filter((epoch) => epoch > now);
+  if (expiryCandidates.length) {
+    const nextExpiry = Math.min(...expiryCandidates);
+    state.communityExpiryTimer = setTimeout(
+      () => renderCommunityRooms(state.communityData || {}),
+      Math.max(50, (nextExpiry - Date.now() / 1000) * 1000 + 50),
+    );
+  }
 }
 
 async function loadCommunityRooms() {
-  try { renderCommunityRooms(await fetchJSON(`/api/community/rooms?t=${Date.now()}`)); }
+  try { renderCommunityRooms(await fetchJSON("/api/community/rooms")); }
   catch (error) {
     $("community-rooms").innerHTML = "";
     const empty = document.createElement("div"); empty.className = "empty-state"; empty.textContent = error.message;
@@ -553,7 +582,7 @@ async function submitCommunityRoom(event) {
     $("community-type").value = "stamp";
     $("community-description").value = "";
     showToast("开门信息已发布");
-    await loadCommunityRooms();
+    if (result.community) renderCommunityRooms(result.community);
   } catch (error) { showToast(error.message); }
 }
 
@@ -656,7 +685,7 @@ function openDrawer(kind) {
     if (button) button.classList.toggle("is-active", name === kind);
   });
   if (kind === "ranking") selectRankingView(state.rankingView);
-  if (kind === "community") loadCommunityRooms();
+  if (kind === "community" && !state.communityData) loadCommunityRooms();
   if (kind === "good") selectGoodView(state.goodView);
 }
 
@@ -691,11 +720,12 @@ $("copy-code").addEventListener("click", async () => {
   catch { showToast("复制失败，请长按CODE复制"); }
 });
 
-refreshLive();
-loadCommunityRooms();
-if (!localPreview) connectLiveStream();
+if (localPreview) refreshLive();
+else connectLiveStream();
+setTimeout(() => {
+  if (!state.communityData) loadCommunityRooms();
+}, localPreview ? 0 : 3000);
 setInterval(() => {
   if (!state.liveSocket || state.liveSocket.readyState !== WebSocket.OPEN) refreshLive();
-}, localPreview ? 2000 : 10000);
+}, localPreview ? 2000 : 60_000);
 setInterval(updateCountdown, 1000);
-setInterval(loadCommunityRooms, 30_000);

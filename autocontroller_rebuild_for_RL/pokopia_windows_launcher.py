@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -20,6 +21,7 @@ SERVER_SCRIPT = BASE_DIR / "pokopia_web_server.py"
 WATCHDOG_SCRIPT = BASE_DIR / "smart_macro6_watchdog.py"
 EDGE_UPLOADER_SCRIPT = BASE_DIR / "pokopia_edge_uploader.py"
 EDGE_CONFIG = BASE_DIR / "pokopia_edge_config.json"
+WEB_STATE = BASE_DIR / "macro6_web_state.json"
 WATCHDOG_CONFIG = BASE_DIR / "runtime_config.local.json"
 LOCAL_URL = "http://127.0.0.1:8787/"
 READY_URL = LOCAL_URL + "api/live"
@@ -175,6 +177,26 @@ def _stop_process(process: subprocess.Popen | None) -> None:
         process.kill()
 
 
+def _publish_clean_exit(environment: dict[str, str]) -> None:
+    """Synchronously publish Macro6's final offline state before teardown."""
+    try:
+        state = json.loads(WEB_STATE.read_text(encoding="utf-8-sig"))
+        if str(state.get("status", {}).get("key") or "") != "offline":
+            print("watchdog未写出正常离线状态；保留云端超时判定。")
+            return
+        result = subprocess.run(
+            [sys.executable, "-u", str(EDGE_UPLOADER_SCRIPT), "--once-no-media"],
+            cwd=str(ROOT_DIR),
+            env=environment,
+            timeout=20,
+            check=False,
+        )
+        if result.returncode != 0:
+            print("最终离线状态上报失败；网页将在保活超时后自动显示离线。")
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+        print(f"最终离线状态上报失败：{exc}；网页将在保活超时后自动显示离线。")
+
+
 def main() -> int:
     server: subprocess.Popen | None = None
     watchdog: subprocess.Popen | None = None
@@ -222,7 +244,12 @@ def main() -> int:
             env=environment,
         )
         process_group.add(watchdog)
-        return watchdog.wait()
+        return_code = watchdog.wait()
+        if edge_uploader is not None:
+            _stop_process(edge_uploader)
+            edge_uploader = None
+            _publish_clean_exit(environment)
+        return return_code
     except KeyboardInterrupt:
         print("\n收到中断，正在关闭 watchdog 与网页服务……")
         return 130

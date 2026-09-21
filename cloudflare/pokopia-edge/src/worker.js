@@ -242,13 +242,32 @@ export class LiveState {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server);
-      const current = await this.ctx.storage.get("state");
+      const [current, community] = await Promise.all([
+        this.ctx.storage.get("state"),
+        this.ctx.storage.get("community"),
+      ]);
       if (current) server.send(JSON.stringify(current));
+      if (community) server.send(JSON.stringify(community));
       return new Response(null, { status: 101, webSocket: client });
     }
     if (request.method === "PUT") {
       const payload = await request.json();
       await this.ctx.storage.put("state", payload);
+      const message = JSON.stringify(payload);
+      for (const socket of this.ctx.getWebSockets()) {
+        try {
+          socket.send(message);
+        } catch {
+          try { socket.close(1011, "send failed"); } catch { /* already closed */ }
+        }
+      }
+      return new Response(null, { status: 204 });
+    }
+    if (request.method === "POST") {
+      const payload = await request.json();
+      if (payload?.event === "community_rooms") {
+        await this.ctx.storage.put("community", payload);
+      }
       const message = JSON.stringify(payload);
       for (const socket of this.ctx.getWebSockets()) {
         try {
@@ -291,7 +310,7 @@ async function publishLive(request, env) {
   if (code && !CODE_RE.test(code)) return json({ error: "CODE格式无效。" }, 400);
   payload.code = code;
   payload.edge_received_at_epoch = Date.now() / 1000;
-  payload.offline_after_seconds = Math.max(10, clampCount(env.OFFLINE_AFTER_SECONDS || 30));
+  payload.offline_after_seconds = Math.max(10, clampCount(env.OFFLINE_AFTER_SECONDS || 420));
   payload.code_unknown = !code && payload.code_unknown === true;
   payload.screenshot_url = (code || payload.code_unknown) && payload.screenshot_url
     ? "/media/current-code.png"
@@ -388,7 +407,7 @@ async function getLive(request, env, ctx) {
   const storedResponse = await stub.fetch("https://live.internal/state");
   const state = await storedResponse.json();
   const received = Number(state.edge_received_at_epoch || 0);
-  const offlineAfter = Math.max(10, clampCount(env.OFFLINE_AFTER_SECONDS || 30));
+  const offlineAfter = Math.max(10, clampCount(env.OFFLINE_AFTER_SECONDS || 420));
   const stale = received ? Math.max(0, Date.now() / 1000 - received) : null;
   if (stale === null || stale > offlineAfter) {
     state.status = { key: "offline", label: "离线", tone: "gray" };
@@ -505,10 +524,7 @@ async function communityStatus(request, env) {
   });
 }
 
-async function listCommunityRooms(request, env) {
-  if (!(await rateLimit(request, env, "community-rooms"))) {
-    return json({ error: "请求过快，每秒最多一次。" }, 429, { "retry-after": "1" });
-  }
+async function communityRoomsPayload(env) {
   const now = unixNow();
   const [result, openRow, writesEnabled] = await Promise.all([
     env.DB.prepare(
@@ -531,12 +547,36 @@ async function listCommunityRooms(request, env) {
     ).bind(now - COMMUNITY_VISIBLE_SECONDS).first(),
     communityWritesEnabled(env),
   ]);
-  return json({
+  return {
     writes_enabled: writesEnabled,
     open_count: clampCount(openRow?.open_count),
     rooms: (result.results || []).map(publicRoom),
     generated_at: new Date().toISOString(),
+  };
+}
+
+async function broadcastCommunityRooms(env) {
+  const data = await communityRoomsPayload(env);
+  await broadcastCommunityPayload(env, data);
+  return data;
+}
+
+async function broadcastCommunityPayload(env, data) {
+  const stub = await liveStub(env);
+  await stub.fetch("https://live.internal/event", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ event: "community_rooms", data }),
   });
+}
+
+async function listCommunityRooms(request, env) {
+  if (!(await rateLimit(request, env, "community-rooms"))) {
+    return json({ error: "请求过快，每秒最多一次。" }, 429, { "retry-after": "1" });
+  }
+  const data = await communityRoomsPayload(env);
+  await broadcastCommunityPayload(env, data);
+  return json(data);
 }
 
 async function incrementCommunityUsage(env, day, actorHash, field) {
@@ -610,10 +650,12 @@ async function createCommunityRoom(request, env) {
     ),
     await incrementCommunityUsage(env, day, identity.actorHash, "uploads"),
   ]);
-  return json({ ok: true, room: publicRoom({
+  const room = publicRoom({
     id, player_name: playerName, code, room_type: roomType, description,
     created_at: now, full_reported_at: null, invalid_reported_at: null, invalid_votes: 0,
-  }) }, 201);
+  });
+  const community = await broadcastCommunityRooms(env);
+  return json({ ok: true, room, community }, 201);
 }
 
 function communityRoomId(pathname, suffix = "") {
@@ -702,7 +744,8 @@ async function feedbackCommunityRoom(request, env, roomId) {
     statements.push(await incrementCommunityUsage(env, day, identity.actorHash, "early_invalid_feedbacks"));
   }
   await env.DB.batch(statements);
-  return json({ ok: true, message });
+  const community = await broadcastCommunityRooms(env);
+  return json({ ok: true, message, community });
 }
 
 async function deleteCommunityRoom(request, env, roomId) {
@@ -722,7 +765,8 @@ async function deleteCommunityRoom(request, env, roomId) {
     "UPDATE community_rooms SET deleted_at = ?, delete_reason = 'owner_correction' WHERE id = ? AND owner_hash = ? AND deleted_at IS NULL",
   ).bind(unixNow(), roomId, hashedOwner).run();
   if (!result.meta?.changes) return json({ error: "删除凭证不匹配，只有原发布浏览器可以删除。" }, 403);
-  return json({ ok: true, deleted: true });
+  const community = await broadcastCommunityRooms(env);
+  return json({ ok: true, deleted: true, community });
 }
 
 async function communityLeaderboard(request, env) {
@@ -829,7 +873,8 @@ async function importCommunityData(request, env) {
   for (let offset = 0; offset < statements.length; offset += 80) {
     await env.DB.batch(statements.slice(offset, offset + 80));
   }
-  return json({ ok: true, rooms: rooms.length, feedback: feedback.length, usage: usage.length });
+  const community = await broadcastCommunityRooms(env);
+  return json({ ok: true, rooms: rooms.length, feedback: feedback.length, usage: usage.length, community });
 }
 
 async function toggleCommunityWrites(request, env) {
@@ -846,7 +891,8 @@ async function toggleCommunityWrites(request, env) {
     `INSERT INTO community_settings(key, value, updated_at) VALUES('writes_enabled', ?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   ).bind(enabled ? "true" : "false", unixNow()).run();
-  return json({ ok: true, writes_enabled: enabled });
+  const community = await broadcastCommunityRooms(env);
+  return json({ ok: true, writes_enabled: enabled, community });
 }
 
 export default {

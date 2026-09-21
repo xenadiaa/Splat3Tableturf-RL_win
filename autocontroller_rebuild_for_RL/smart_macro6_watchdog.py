@@ -124,7 +124,7 @@ CAPTURE_FALLBACK_SPECS = (
 MACRO_HEARTBEAT_TIMEOUT_SECONDS = 45.0
 CAPTURE_HEARTBEAT_TIMEOUT_SECONDS = 15.0
 RESTART_DELAY_SECONDS = 3.0
-MACRO6_BUILD_ID = "v1.60"
+MACRO6_BUILD_ID = "v1.62"
 SUPERVISED_CHILD_ENV = "MACRO6_SUPERVISED_CHILD"
 MACRO_HEARTBEAT_ENV = "MACRO6_MACRO_HEARTBEAT"
 CAPTURE_HEARTBEAT_ENV = "MACRO6_CAPTURE_HEARTBEAT"
@@ -7437,7 +7437,24 @@ def _wait_for_connect_ok_and_submit(
     context: _HeartbeatMacroContext,
     visual_state: _PokopiaVisualState,
 ) -> bool:
-    """Submit from CONNECT_OK and retry there until the CODE page appears."""
+    """Wait for CONNECT_OK/CODE while giving a new network error priority."""
+    network_visible_at_start, network_revision_at_start = (
+        visual_state.network_error_state()
+    )
+
+    def raise_if_network_error() -> None:
+        visible, revision = visual_state.network_error_state()
+        if (
+            visible
+            or network_visible_at_start
+            or revision > network_revision_at_start
+        ):
+            _timestamped_log(
+                "按+后的连接阶段检测到Switch连接错误弹窗："
+                "立即结束等待并进入网络异常重开。"
+            )
+            raise _NetworkConnectionError
+
     context.set_web_phase(
         "waiting_connect_ok",
         "已提交开门，正在等待连接完成",
@@ -7446,14 +7463,18 @@ def _wait_for_connect_ok_and_submit(
         tone="amber",
     )
     _timestamped_log("已按+，持续等待 CONNECT_OK=ON 后按A进入CODE页面。")
-    if not _wait_for_visual_state(context, visual_state.connect_ok):
-        return False
+    while not visual_state.connect_ok():
+        raise_if_network_error()
+        if not context.wait_ms(100):
+            return False
+    raise_if_network_error()
     _timestamped_log("检测到 CONNECT_OK=ON，按A并等待500ms。")
     context.set_web_phase("submitting_connection", "连接已开始，正在进入CODE页面")
     submitted_at = context.active_monotonic()
     if not context.tap(BIT_A, hold_ms=50, gap_ms=500):
         return False
     while not visual_state.code_panel():
+        raise_if_network_error()
         if (
             context.active_monotonic() - submitted_at
             >= CONNECT_OK_CODE_RETRY_SECONDS
@@ -7468,6 +7489,7 @@ def _wait_for_connect_ok_and_submit(
                 return False
         if not context.wait_ms(100):
             return False
+    raise_if_network_error()
     _timestamped_log("已检测到CODE画面，进入新CODE识别等待状态。")
     context.set_web_phase("waiting_code_ocr", "CODE画面已出现，正在识别六位密语")
     return True
@@ -7597,7 +7619,31 @@ def _run_macro4_with_cursor_retry(
         return False
     if not context.tap(BIT_PLUS, hold_ms=50, gap_ms=0):
         return False
-    return _wait_for_connect_ok_and_submit(context, visual_state)
+    network_reopen = False
+    while not context.stop_event.is_set():
+        try:
+            if network_reopen:
+                return _run_macro12_download_chain(
+                    context,
+                    visual_state,
+                    start_at_home=True,
+                    reopen_reason="network_connection_error",
+                )
+            return _wait_for_connect_ok_and_submit(context, visual_state)
+        except _NetworkConnectionError:
+            network_reopen = True
+            context.set_web_phase(
+                "network_error_reopen",
+                "检测到网络波动，正在从HOME重新开放",
+                status_key="error",
+                status_label="网络异常重开",
+                tone="red",
+            )
+            _timestamped_log(
+                "按键3/4在按+后的连接阶段检测到网络错误："
+                "跳过前置退出动作，直接从HOME执行网络异常重开。"
+            )
+    return False
 
 
 def _leave_code_page_and_locate_stamp(
@@ -8510,12 +8556,31 @@ def _run_dynamic_macro2_once(
     while not context.stop_event.is_set():
         baseline_revision = code_recognizer.revision()
         announcement_tracker.ensure_restart_started()
-        if not _run_macro12_download_chain(
-            context,
-            visual_state,
-            start_at_home=network_reopen_from_home,
-        ):
-            return False
+        try:
+            if not _run_macro12_download_chain(
+                context,
+                visual_state,
+                start_at_home=network_reopen_from_home,
+            ):
+                return False
+        except _NetworkConnectionError:
+            announcement_tracker.mark_network_connection_error(
+                code_recognizer.timer_elapsed_seconds()
+            )
+            network_reopen_from_home = True
+            context.set_web_phase(
+                "network_error_reopen",
+                "检测到网络波动，正在关闭本轮并重新开放",
+                status_key="error",
+                status_label="网络异常重开",
+                tone="red",
+            )
+            _timestamped_log(
+                "按键2在按+后的连接阶段检测到网络错误："
+                "结束本轮并直接从HOME重新执行读档/开门；"
+                "取得新CODE后停止。"
+            )
+            continue
         network_reopen_from_home = False
         code_recognizer.begin_ocr_round(2)
         _timestamped_log("按键2原内容已完成，等待执行后新CODE。")

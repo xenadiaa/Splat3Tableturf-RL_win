@@ -35,6 +35,6 @@
   ],
   "vars": {
     "CANONICAL_HOST": "stamp.rabi.date",
-    "OFFLINE_AFTER_SECONDS": "30"
+    "OFFLINE_AFTER_SECONDS": "420"
   }
 }

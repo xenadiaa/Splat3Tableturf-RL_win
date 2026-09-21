@@ -26,7 +26,7 @@ class EdgeConfig:
     upload_token: str
     local_url: str = "http://127.0.0.1:8787"
     live_interval_seconds: float = 2.0
-    heartbeat_seconds: float = 10.0
+    heartbeat_seconds: float = 300.0
     stats_interval_seconds: float = 30.0
 
 
@@ -114,12 +114,12 @@ def save_edge_config(base_url: str, token: str, path: Path = CONFIG_PATH) -> Non
     if len(secret) < 32:
         raise ValueError("上传令牌至少需要32个字符。")
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "base_url": normalized_url,
         "token_dpapi": protect_token(secret),
         "local_url": "http://127.0.0.1:8787",
         "live_interval_seconds": 2.0,
-        "heartbeat_seconds": 10.0,
+        "heartbeat_seconds": 300.0,
         "stats_interval_seconds": 30.0,
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -134,11 +134,17 @@ def load_edge_config(path: Path = CONFIG_PATH) -> EdgeConfig:
         token = unprotect_token(str(payload.get("token_dpapi") or ""))
     if len(token) < 32:
         raise ValueError("边缘上传令牌缺失或无效。")
+    schema_version = int(payload.get("schema_version") or 1)
+    heartbeat_seconds = float(payload.get("heartbeat_seconds") or 300.0)
+    # v1 used a 10-second cloud heartbeat.  That needlessly consumed both a
+    # Worker request and a Durable Object request even when nothing changed.
+    if schema_version < 2 and heartbeat_seconds <= 10.0:
+        heartbeat_seconds = 300.0
     return EdgeConfig(
         base_url=validate_base_url(str(payload.get("base_url") or "")),
         upload_token=token,
         local_url=str(payload.get("local_url") or "http://127.0.0.1:8787").rstrip("/"),
         live_interval_seconds=max(1.0, float(payload.get("live_interval_seconds") or 2.0)),
-        heartbeat_seconds=max(5.0, float(payload.get("heartbeat_seconds") or 10.0)),
+        heartbeat_seconds=max(60.0, heartbeat_seconds),
         stats_interval_seconds=max(10.0, float(payload.get("stats_interval_seconds") or 30.0)),
     )

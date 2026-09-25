@@ -197,6 +197,19 @@ def _publish_clean_exit(environment: dict[str, str]) -> None:
         print(f"最终离线状态上报失败：{exc}；网页将在保活超时后自动显示离线。")
 
 
+def _start_edge_uploader(
+    environment: dict[str, str],
+    process_group: _WindowsProcessGroup,
+) -> subprocess.Popen:
+    process = subprocess.Popen(
+        [sys.executable, "-u", str(EDGE_UPLOADER_SCRIPT)],
+        cwd=str(ROOT_DIR),
+        env=environment,
+    )
+    process_group.add(process)
+    return process
+
+
 def main() -> int:
     server: subprocess.Popen | None = None
     watchdog: subprocess.Popen | None = None
@@ -222,12 +235,7 @@ def main() -> int:
 
         if EDGE_CONFIG.is_file():
             print("检测到Cloudflare边缘配置，正在启动独立上传进程……")
-            edge_uploader = subprocess.Popen(
-                [sys.executable, "-u", str(EDGE_UPLOADER_SCRIPT)],
-                cwd=str(ROOT_DIR),
-                env=environment,
-            )
-            process_group.add(edge_uploader)
+            edge_uploader = _start_edge_uploader(environment, process_group)
         else:
             print("Cloudflare边缘上传尚未配置；当前只运行本机网页，Macro6不受影响。")
 
@@ -244,7 +252,37 @@ def main() -> int:
             env=environment,
         )
         process_group.add(watchdog)
-        return_code = watchdog.wait()
+        edge_restart_delay = 1.0
+        edge_started_at = time.monotonic()
+        edge_restart_at = 0.0
+        while watchdog.poll() is None:
+            if EDGE_CONFIG.is_file() and (
+                edge_uploader is None or edge_uploader.poll() is not None
+            ):
+                now = time.monotonic()
+                if edge_uploader is not None:
+                    exit_code = edge_uploader.poll()
+                    lived_for = max(0.0, now - edge_started_at)
+                    print(
+                        "检测到Cloudflare边缘上传进程异常退出"
+                        f"（代码{exit_code}，运行{lived_for:.0f}秒）；"
+                        f"将在{max(0.0, edge_restart_at - now):.0f}秒内重启。"
+                    )
+                    edge_uploader = None
+                if now >= edge_restart_at:
+                    edge_uploader = _start_edge_uploader(
+                        environment,
+                        process_group,
+                    )
+                    edge_started_at = now
+                    edge_restart_at = now + edge_restart_delay
+                    edge_restart_delay = min(60.0, edge_restart_delay * 2.0)
+                    print("Cloudflare边缘上传进程已自动重启。")
+            elif edge_uploader is not None:
+                if time.monotonic() - edge_started_at >= 60.0:
+                    edge_restart_delay = 1.0
+            time.sleep(0.5)
+        return_code = int(watchdog.returncode or 0)
         if edge_uploader is not None:
             _stop_process(edge_uploader)
             edge_uploader = None

@@ -123,11 +123,13 @@ CAPTURE_FALLBACK_SPECS = (
 )
 MACRO_HEARTBEAT_TIMEOUT_SECONDS = 45.0
 CAPTURE_HEARTBEAT_TIMEOUT_SECONDS = 15.0
+VISION_HEARTBEAT_TIMEOUT_SECONDS = 15.0
 RESTART_DELAY_SECONDS = 3.0
-MACRO6_BUILD_ID = "v1.62"
+MACRO6_BUILD_ID = "v1.65"
 SUPERVISED_CHILD_ENV = "MACRO6_SUPERVISED_CHILD"
 MACRO_HEARTBEAT_ENV = "MACRO6_MACRO_HEARTBEAT"
 CAPTURE_HEARTBEAT_ENV = "MACRO6_CAPTURE_HEARTBEAT"
+VISION_HEARTBEAT_ENV = "MACRO6_VISION_HEARTBEAT"
 RUN_COUNTER_FILENAME = "macro6_watchdog_stats.json"
 CODE_ARCHIVE_DIRNAME = "pokopia_stamp_records"
 CODE_TIMER_RESTART_SECONDS = 15 * 60
@@ -5436,6 +5438,28 @@ class FFmpegCapture:
 
     def snapshot(self) -> FrameSnapshot:
         with self._lock:
+            frame = (
+                None
+                if self._snapshot.frame is None
+                else self._snapshot.frame.copy()
+            )
+            raw_frame = (
+                None
+                if self._snapshot.raw_frame is None
+                else self._snapshot.raw_frame.copy()
+            )
+            return FrameSnapshot(
+                self._snapshot.sequence,
+                frame,
+                self._snapshot.error,
+                raw_frame,
+            )
+
+    def snapshot_after(self, sequence: int) -> FrameSnapshot | None:
+        """Copy the capture buffers only when a newer frame is available."""
+        with self._lock:
+            if self._snapshot.sequence <= sequence:
+                return None
             frame = (
                 None
                 if self._snapshot.frame is None
@@ -12971,20 +12995,26 @@ def _terminate_supervised_child(child: subprocess.Popen[bytes]) -> None:
 
 
 def run_with_hard_recovery_supervisor() -> int:
-    """Restart the child when either macro or capture stops responding."""
+    """Restart the child when macro, capture, or vision stops responding."""
     with tempfile.TemporaryDirectory(prefix="macro6-watchdog-") as raw_dir:
         heartbeat_path = Path(raw_dir) / "macro.heartbeat"
         capture_heartbeat_path = Path(raw_dir) / "capture.heartbeat"
+        vision_heartbeat_path = Path(raw_dir) / "vision.heartbeat"
         restart_count = 0
 
         while True:
-            for stale_path in (heartbeat_path, capture_heartbeat_path):
+            for stale_path in (
+                heartbeat_path,
+                capture_heartbeat_path,
+                vision_heartbeat_path,
+            ):
                 with contextlib.suppress(OSError):
                     stale_path.unlink()
             environment = dict(os.environ)
             environment[SUPERVISED_CHILD_ENV] = "1"
             environment[MACRO_HEARTBEAT_ENV] = str(heartbeat_path)
             environment[CAPTURE_HEARTBEAT_ENV] = str(capture_heartbeat_path)
+            environment[VISION_HEARTBEAT_ENV] = str(vision_heartbeat_path)
             command = [
                 sys.executable,
                 str(Path(__file__).resolve()),
@@ -13014,14 +13044,22 @@ def run_with_hard_recovery_supervisor() -> int:
                         capture_heartbeat_path,
                         time.time(),
                     )
+                    vision_age = _heartbeat_age(
+                        vision_heartbeat_path,
+                        time.time(),
+                    )
                     if not monitoring_ready:
                         # Serial discovery may legitimately wait forever.  The
-                        # watchdog is armed after both workers report in.
-                        if macro_age is not None and capture_age is not None:
+                        # watchdog is armed after all three workers report in.
+                        if (
+                            macro_age is not None
+                            and capture_age is not None
+                            and vision_age is not None
+                        ):
                             monitoring_ready = True
                             _timestamped_log(
                                 "macro6 外层防卡死监控已就绪："
-                                "宏线程和视频采集均已有心跳。"
+                                "宏线程、视频采集和画面识别均已有心跳。"
                             )
                     else:
                         if (
@@ -13040,6 +13078,15 @@ def run_with_hard_recovery_supervisor() -> int:
                             reason = (
                                 "视频采集超过"
                                 f"{CAPTURE_HEARTBEAT_TIMEOUT_SECONDS:g}秒未刷新"
+                            )
+                            break
+                        if (
+                            vision_age is None
+                            or vision_age > VISION_HEARTBEAT_TIMEOUT_SECONDS
+                        ):
+                            reason = (
+                                "画面识别超过"
+                                f"{VISION_HEARTBEAT_TIMEOUT_SECONDS:g}秒未刷新"
                             )
                             break
                     time.sleep(0.5)
@@ -13064,6 +13111,7 @@ def main() -> int:
     worker_errors: list[BaseException] = []
     heartbeat = _HeartbeatFile(MACRO_HEARTBEAT_ENV)
     capture_heartbeat = _HeartbeatFile(CAPTURE_HEARTBEAT_ENV)
+    vision_heartbeat = _HeartbeatFile(VISION_HEARTBEAT_ENV)
     controller = None
     capture: FFmpegCapture | None = None
     web_publisher: PokopiaWebStatePublisher | None = None
@@ -13182,6 +13230,200 @@ def main() -> int:
                     context.status_callback = None
                     _commit_status_line()
 
+        # Windows enters a modal HighGUI move/resize loop while the user drags
+        # an imshow window.  Keep every time-sensitive visual operation away
+        # from that UI thread so dragging can only pause the visible preview,
+        # never recognition, macro decisions, screenshots, or web state.
+        display_lock = threading.Lock()
+        latest_display: np.ndarray | None = None
+
+        def vision_worker() -> None:
+            nonlocal latest_display
+            code_panel_detected_since: float | None = None
+            room_code_revision = code_recognizer.revision()
+            last_web_update_monotonic = 0.0
+            last_snapshot_sequence = -1
+            try:
+                vision_heartbeat.beat(force=True)
+                while not stop_event.is_set():
+                    vision_heartbeat.beat()
+                    snapshot = capture.snapshot_after(last_snapshot_sequence)
+                    if snapshot is None:
+                        stop_event.wait(0.005)
+                        continue
+                    last_snapshot_sequence = snapshot.sequence
+                    if snapshot.frame is None:
+                        stop_event.wait(0.03)
+                        continue
+
+                    detection = detector.detect(snapshot.frame)
+                    visual_state.update(detection)
+                    player_notification_recognizer.request(
+                        snapshot.raw_frame
+                        if snapshot.raw_frame is not None
+                        else snapshot.frame
+                    )
+                    if detection.code_panel:
+                        now = time.monotonic()
+                        if code_panel_detected_since is None:
+                            code_panel_detected_since = now
+                        elif (
+                            now - code_panel_detected_since
+                            >= CODE_PANEL_STABILIZATION_SECONDS
+                        ):
+                            code_recognizer.request(
+                                snapshot.frame,
+                                detection,
+                                suppress_chime=(
+                                    context.current_macro_key() == 1
+                                ),
+                            )
+                    else:
+                        code_panel_detected_since = None
+                        code_recognizer.note_code_panel_absent()
+                    current_code_revision = code_recognizer.revision()
+                    if current_code_revision != room_code_revision:
+                        room_code_revision = current_code_revision
+                        room_player_tracker.clear_for_new_code()
+                    room_disconnected, displayed_room_players = (
+                        room_player_tracker.display_snapshot()
+                    )
+                    count_snapshot = run_counter.snapshot()
+                    timer_elapsed = code_recognizer.timer_elapsed_seconds()
+                    now_web_update = time.monotonic()
+                    if (
+                        now_web_update - last_web_update_monotonic
+                        >= 0.25
+                    ):
+                        last_web_update_monotonic = now_web_update
+                        timer_active = (
+                            context.web_phase_key() == "stamp_cycle"
+                        )
+                        web_fields = dict(
+                            macro_key=context.current_macro_key(),
+                            operation_locked=context.operation_locked(),
+                            room_disconnected=room_disconnected,
+                            players=[
+                                {"name": name, "status": status}
+                                for name, status in displayed_room_players
+                            ],
+                            counts={
+                                "operational_date": (
+                                    count_snapshot.operational_date
+                                ),
+                                "daily_runs": count_snapshot.daily_runs,
+                                "total_runs": count_snapshot.total_runs,
+                                "round_player_entries": (
+                                    room_player_tracker
+                                    .current_round_entries()
+                                ),
+                                "round_player_entry_failures": (
+                                    room_player_tracker
+                                    .current_round_entry_failures()
+                                ),
+                                "daily_player_entries": (
+                                    count_snapshot.daily_player_entries
+                                ),
+                                "total_player_entries": (
+                                    count_snapshot.total_player_entries
+                                ),
+                                "daily_player_entry_failures": (
+                                    count_snapshot
+                                    .daily_player_entry_failures
+                                ),
+                                "total_player_entry_failures": (
+                                    count_snapshot
+                                    .total_player_entry_failures
+                                ),
+                            },
+                            tasks={
+                                "completed": visual_state.completed_tasks(),
+                                "total": 3,
+                            },
+                            timer={
+                                "elapsed_seconds": (
+                                    round(timer_elapsed, 1)
+                                    if timer_elapsed is not None
+                                    else None
+                                ),
+                                "limit_seconds": (
+                                    CODE_TIMER_RESTART_SECONDS
+                                ),
+                                "remaining_seconds": (
+                                    max(
+                                        0.0,
+                                        round(
+                                            CODE_TIMER_RESTART_SECONDS
+                                            - timer_elapsed,
+                                            1,
+                                        ),
+                                    )
+                                    if (
+                                        timer_elapsed is not None
+                                        and timer_active
+                                    )
+                                    else None
+                                ),
+                                "active": timer_active,
+                            },
+                            detection={
+                                "save_finished": detection.save_finished,
+                                "black_screen": detection.black_screen,
+                                "connect_ok": detection.connect_ok,
+                                "code_panel": detection.code_panel,
+                                "cursor": detection.cursor,
+                                "reward": detection.reward,
+                                "reward_lines": detection.reward_lines,
+                                "stamp": detection.stamp,
+                                "network_error": detection.network_error,
+                            },
+                        )
+                        # While the macro worker is finishing the new
+                        # screenshot and announcement, keep the prior public
+                        # CODE/status together. set_web_code_ready() publishes
+                        # the new tuple atomically.
+                        if context.web_phase_key() != "waiting_code_ocr":
+                            web_fields.update(
+                                code=code_recognizer.snapshot(),
+                                code_unknown=code_recognizer.is_unknown(),
+                                code_revision=current_code_revision,
+                            )
+                        web_publisher.update(**web_fields)
+                    display = render_watchdog_overlay(
+                        snapshot.frame,
+                        detection,
+                        (
+                            "未知"
+                            if code_recognizer.is_unknown()
+                            else code_recognizer.snapshot()
+                        ),
+                        count_snapshot,
+                        timer_elapsed,
+                        visual_state.completed_tasks(),
+                        displayed_room_players,
+                        room_disconnected,
+                        room_player_tracker.current_round_entries(),
+                        room_player_tracker.current_round_entry_failures(),
+                        player_notification_recognizer.icon_visible(),
+                        player_notification_recognizer
+                        .notification_visible(),
+                        context.operation_locked(),
+                    )
+                    if context.manual_screenshot_event.is_set():
+                        context.manual_screenshot_event.clear()
+                        code_archive.record_manual_screenshot(
+                            snapshot.raw_frame
+                            if snapshot.raw_frame is not None
+                            else snapshot.frame,
+                            detection,
+                        )
+                    with display_lock:
+                        latest_display = display
+                    stop_event.wait(0.01)
+            except BaseException as exc:
+                worker_errors.append(exc)
+                stop_event.set()
+
         workers = [
             threading.Thread(
                 target=controller_worker,
@@ -13192,6 +13434,11 @@ def main() -> int:
                 target=_listen_for_watchdog_keyboard,
                 args=(context, pause_state, run_counter, worker_errors),
                 name="macro6-watchdog-keyboard",
+                daemon=True,
+            ),
+            threading.Thread(
+                target=vision_worker,
+                name="macro6-watchdog-vision",
                 daemon=True,
             ),
         ]
@@ -13212,7 +13459,7 @@ def main() -> int:
             "手柄保活：连续300秒无实际手柄输入时自动按上、下各一次。\n"
             "执行期间新的 1/2/3/4 会被丢弃；"
             "普通手动控制键在宏执行期间仍然有效。"
-            "外层防卡死监控已启用：宏线程或采集画面无响应时会完整重启；"
+            "外层防卡死监控已启用：宏线程、采集或识别无响应时会完整重启；"
             "重启后安全返回 1/2/3/4 待机，不自动重放中断段。\n"
         )
         window_title = (
@@ -13221,138 +13468,16 @@ def main() -> int:
         cv2.namedWindow(window_title, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_title, CAPTURE_WIDTH, CAPTURE_HEIGHT)
 
-        code_panel_detected_since: float | None = None
-        room_code_revision = code_recognizer.revision()
-        last_web_update_monotonic = 0.0
+        displayed_frame: np.ndarray | None = None
         while not stop_event.is_set():
-            snapshot = capture.snapshot()
-            if snapshot.frame is None:
-                time.sleep(0.03)
-                continue
-
-            detection = detector.detect(snapshot.frame)
-            visual_state.update(detection)
-            player_notification_recognizer.request(
-                snapshot.raw_frame
-                if snapshot.raw_frame is not None
-                else snapshot.frame
-            )
-            if detection.code_panel:
-                now = time.monotonic()
-                if code_panel_detected_since is None:
-                    code_panel_detected_since = now
-                elif (
-                    now - code_panel_detected_since
-                    >= CODE_PANEL_STABILIZATION_SECONDS
-                ):
-                    code_recognizer.request(
-                        snapshot.frame,
-                        detection,
-                        suppress_chime=context.current_macro_key() == 1,
-                    )
-            else:
-                code_panel_detected_since = None
-                code_recognizer.note_code_panel_absent()
-            current_code_revision = code_recognizer.revision()
-            if current_code_revision != room_code_revision:
-                room_code_revision = current_code_revision
-                room_player_tracker.clear_for_new_code()
-            room_disconnected, displayed_room_players = (
-                room_player_tracker.display_snapshot()
-            )
-            count_snapshot = run_counter.snapshot()
-            timer_elapsed = code_recognizer.timer_elapsed_seconds()
-            now_web_update = time.monotonic()
-            if now_web_update - last_web_update_monotonic >= 0.25:
-                last_web_update_monotonic = now_web_update
-                timer_active = context.web_phase_key() == "stamp_cycle"
-                web_fields = dict(
-                    macro_key=context.current_macro_key(),
-                    operation_locked=context.operation_locked(),
-                    room_disconnected=room_disconnected,
-                    players=[
-                        {"name": name, "status": status}
-                        for name, status in displayed_room_players
-                    ],
-                    counts={
-                        "operational_date": count_snapshot.operational_date,
-                        "daily_runs": count_snapshot.daily_runs,
-                        "total_runs": count_snapshot.total_runs,
-                        "round_player_entries": room_player_tracker.current_round_entries(),
-                        "round_player_entry_failures": room_player_tracker.current_round_entry_failures(),
-                        "daily_player_entries": count_snapshot.daily_player_entries,
-                        "total_player_entries": count_snapshot.total_player_entries,
-                        "daily_player_entry_failures": count_snapshot.daily_player_entry_failures,
-                        "total_player_entry_failures": count_snapshot.total_player_entry_failures,
-                    },
-                    tasks={
-                        "completed": visual_state.completed_tasks(),
-                        "total": 3,
-                    },
-                    timer={
-                        "elapsed_seconds": (
-                            round(timer_elapsed, 1)
-                            if timer_elapsed is not None
-                            else None
-                        ),
-                        "limit_seconds": CODE_TIMER_RESTART_SECONDS,
-                        "remaining_seconds": (
-                            max(0.0, round(CODE_TIMER_RESTART_SECONDS - timer_elapsed, 1))
-                            if timer_elapsed is not None and timer_active
-                            else None
-                        ),
-                        "active": timer_active,
-                    },
-                    detection={
-                        "save_finished": detection.save_finished,
-                        "black_screen": detection.black_screen,
-                        "connect_ok": detection.connect_ok,
-                        "code_panel": detection.code_panel,
-                        "cursor": detection.cursor,
-                        "reward": detection.reward,
-                        "reward_lines": detection.reward_lines,
-                        "stamp": detection.stamp,
-                        "network_error": detection.network_error,
-                    },
-                )
-                # While the macro worker is finishing the new screenshot and
-                # announcement, keep the prior public CODE/status together.
-                # set_web_code_ready() publishes the new tuple atomically.
-                if context.web_phase_key() != "waiting_code_ocr":
-                    web_fields.update(
-                        code=code_recognizer.snapshot(),
-                        code_unknown=code_recognizer.is_unknown(),
-                        code_revision=current_code_revision,
-                    )
-                web_publisher.update(**web_fields)
-            display = render_watchdog_overlay(
-                snapshot.frame,
-                detection,
-                (
-                    "未知"
-                    if code_recognizer.is_unknown()
-                    else code_recognizer.snapshot()
-                ),
-                count_snapshot,
-                timer_elapsed,
-                visual_state.completed_tasks(),
-                displayed_room_players,
-                room_disconnected,
-                room_player_tracker.current_round_entries(),
-                room_player_tracker.current_round_entry_failures(),
-                player_notification_recognizer.icon_visible(),
-                player_notification_recognizer.notification_visible(),
-                context.operation_locked(),
-            )
-            if context.manual_screenshot_event.is_set():
-                context.manual_screenshot_event.clear()
-                code_archive.record_manual_screenshot(
-                    snapshot.raw_frame
-                    if snapshot.raw_frame is not None
-                    else snapshot.frame,
-                    detection,
-                )
-            cv2.imshow(window_title, display)
+            with display_lock:
+                newest_display = latest_display
+            if (
+                newest_display is not None
+                and newest_display is not displayed_frame
+            ):
+                displayed_frame = newest_display
+                cv2.imshow(window_title, displayed_frame)
 
             key_code = cv2.waitKeyEx(1)
             key = {
@@ -13372,6 +13497,7 @@ def main() -> int:
                 pause_state,
                 run_counter,
             ):
+                stop_event.set()
                 break
             window_visible = 1.0
             with contextlib.suppress(Exception):

@@ -26,6 +26,9 @@ const state = {
   liveSocket: null,
   reconnectTimer: null,
   reconnectDelay: 2000,
+  lastLiveReceivedAt: 0,
+  staleReconnectFor: 0,
+  lastForegroundReconnectAt: 0,
   communityData: null,
   communityExpiryTimer: null,
   queryGeneration: 0,
@@ -145,6 +148,11 @@ function renderRecent(rounds = []) {
 }
 
 function renderLive(data) {
+  const incomingReceivedAt = Number(data.edge_received_at_epoch || data.updated_at_epoch || 0);
+  if (incomingReceivedAt && incomingReceivedAt !== state.lastLiveReceivedAt) {
+    state.lastLiveReceivedAt = incomingReceivedAt;
+    state.staleReconnectFor = 0;
+  }
   state.live = data;
   setStatus(data.status);
   $("phase-label").textContent = data.phase?.label || "等待状态更新";
@@ -224,13 +232,16 @@ function updateCountdown() {
   const offlineAfter = number(state.live?.offline_after_seconds) || 420;
   const stale = receivedAt ? Math.max(0, Math.round(Date.now() / 1000 - receivedAt)) : null;
   $("last-updated").textContent = stale == null ? "尚未收到心跳" : stale <= 2 ? "刚刚更新" : `${stale}秒前更新`;
-  if (receivedAt && Date.now() / 1000 - receivedAt > offlineAfter && state.live?.status?.key !== "offline") {
-    state.live.status = { key: "offline", label: "离线" };
-    state.live.phase = { key: "offline", label: "Windows状态心跳已中断，当前内容可能过期" };
-    setStatus(state.live.status);
-    $("phase-label").textContent = state.live.phase.label;
+  const heartbeatStale = Boolean(receivedAt && Date.now() / 1000 - receivedAt > offlineAfter);
+  if (heartbeatStale) {
+    setStatus({ key: "offline", label: "离线" });
+    $("phase-label").textContent = "Windows状态心跳已中断，正在重新连接";
+    if (!localPreview && state.staleReconnectFor !== receivedAt) {
+      state.staleReconnectFor = receivedAt;
+      reconnectLiveStreamNow("stale-heartbeat");
+    }
   }
-  if (state.countdownRemaining == null || state.live?.status?.key !== "open") {
+  if (heartbeatStale || state.countdownRemaining == null || state.live?.status?.key !== "open") {
     $("countdown").textContent = state.live?.status?.key === "reopening" ? "重开中" : "--:--";
     return;
   }
@@ -292,12 +303,40 @@ function connectLiveStream() {
     }
   });
   socket.addEventListener("close", () => {
-    if (state.liveSocket === socket) state.liveSocket = null;
+    if (state.liveSocket !== socket) return;
+    state.liveSocket = null;
     state.reconnectTimer = setTimeout(connectLiveStream, state.reconnectDelay);
     state.reconnectDelay = Math.min(60_000, state.reconnectDelay * 2);
   });
   socket.addEventListener("error", () => socket.close());
 }
+
+function reconnectLiveStreamNow(reason = "foreground-resume") {
+  if (localPreview) {
+    refreshLive();
+    return;
+  }
+  const now = Date.now();
+  if (reason === "foreground-resume") {
+    if (now - state.lastForegroundReconnectAt < 1000) return;
+    state.lastForegroundReconnectAt = now;
+  }
+  clearTimeout(state.reconnectTimer);
+  const previous = state.liveSocket;
+  state.liveSocket = null;
+  if (previous && previous.readyState < WebSocket.CLOSING) {
+    try { previous.close(1000, reason); } catch { /* reconnect below */ }
+  }
+  state.reconnectDelay = 2000;
+  connectLiveStream();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") reconnectLiveStreamNow();
+});
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) reconnectLiveStreamNow();
+});
 
 function rankingItem(row, kind) {
   const item = document.createElement("li");

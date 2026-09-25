@@ -27,6 +27,7 @@ class EdgeConfig:
     local_url: str = "http://127.0.0.1:8787"
     live_interval_seconds: float = 2.0
     heartbeat_seconds: float = 300.0
+    active_heartbeat_seconds: float = 60.0
     stats_interval_seconds: float = 30.0
 
 
@@ -120,6 +121,7 @@ def save_edge_config(base_url: str, token: str, path: Path = CONFIG_PATH) -> Non
         "local_url": "http://127.0.0.1:8787",
         "live_interval_seconds": 2.0,
         "heartbeat_seconds": 300.0,
+        "active_heartbeat_seconds": 60.0,
         "stats_interval_seconds": 30.0,
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -146,5 +148,9 @@ def load_edge_config(path: Path = CONFIG_PATH) -> EdgeConfig:
         local_url=str(payload.get("local_url") or "http://127.0.0.1:8787").rstrip("/"),
         live_interval_seconds=max(1.0, float(payload.get("live_interval_seconds") or 2.0)),
         heartbeat_seconds=max(60.0, heartbeat_seconds),
+        active_heartbeat_seconds=max(
+            15.0,
+            float(payload.get("active_heartbeat_seconds") or 60.0),
+        ),
         stats_interval_seconds=max(10.0, float(payload.get("stats_interval_seconds") or 30.0)),
     )

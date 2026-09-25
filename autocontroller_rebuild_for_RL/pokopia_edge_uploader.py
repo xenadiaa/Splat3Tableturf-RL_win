@@ -24,6 +24,13 @@ BASE_DIR = Path(__file__).resolve().parent
 STATS_PATH = BASE_DIR / "macro6_watchdog_stats.json"
 SYNC_PATH = BASE_DIR / "pokopia_edge_sync_state.json"
 MAX_SCREENSHOT_BYTES = 8_000_000
+ACTIVE_STATUS_KEYS = {
+    "starting",
+    "running",
+    "reopening",
+    "waiting",
+    "error",
+}
 
 
 def _load_json(path: Path, default):
@@ -229,11 +236,24 @@ class EdgeUploader:
         encoded = _stable_bytes(public_live)
         digest = hashlib.sha256(encoded).hexdigest()
         now = time.monotonic()
-        if digest == self._last_live_hash and now - self._last_live_upload < self.config.heartbeat_seconds:
+        unchanged = digest == self._last_live_hash
+        status = str(public_live.get("status", {}).get("key") or "unknown")
+        heartbeat_seconds = (
+            self.config.active_heartbeat_seconds
+            if status in ACTIVE_STATUS_KEYS
+            else self.config.heartbeat_seconds
+        )
+        if unchanged and now - self._last_live_upload < heartbeat_seconds:
             return
         self._request("/api/publish/live", body=encoded)
         self._last_live_hash = digest
         self._last_live_upload = now
+        reason = f"{heartbeat_seconds:.0f}秒在线保活" if unchanged else "公开状态变化"
+        phase = str(public_live.get("phase", {}).get("key") or "unknown")
+        print(
+            f"边缘实时状态已同步：{reason}；status={status}；phase={phase}。",
+            flush=True,
+        )
 
     def publish_stats_once(self) -> None:
         stats = _load_json(STATS_PATH, {})
@@ -258,23 +278,49 @@ class EdgeUploader:
             )
             temporary.replace(SYNC_PATH)
 
-    def run(self) -> int:
-        print(f"Pokopia边缘上传已启动：{self.config.base_url}", flush=True)
-        next_stats_at = 0.0
+    def _stats_loop(self) -> None:
+        """Synchronize business-day history without ever blocking live state."""
         backoff = 1.0
         while not self.stop_event.is_set():
             try:
-                self.publish_live_once()
-                now = time.monotonic()
-                if now >= next_stats_at:
-                    self.publish_stats_once()
-                    next_stats_at = now + self.config.stats_interval_seconds
+                self.publish_stats_once()
                 backoff = 1.0
-                self.stop_event.wait(self.config.live_interval_seconds)
-            except (HTTPError, URLError, OSError, ValueError, RuntimeError) as exc:
-                print(f"边缘上传暂时失败：{exc}；{backoff:.0f}秒后重试。", flush=True)
+                self.stop_event.wait(self.config.stats_interval_seconds)
+            except Exception as exc:
+                print(
+                    f"边缘历史统计同步暂时失败：{exc}；"
+                    f"不影响实时状态，{backoff:.0f}秒后单独重试。",
+                    flush=True,
+                )
                 self.stop_event.wait(backoff)
-                backoff = min(30.0, backoff * 2.0)
+                backoff = min(60.0, backoff * 2.0)
+
+    def run(self) -> int:
+        print(f"Pokopia边缘上传已启动：{self.config.base_url}", flush=True)
+        stats_thread = threading.Thread(
+            target=self._stats_loop,
+            name="pokopia-edge-stats",
+            daemon=True,
+        )
+        stats_thread.start()
+        backoff = 1.0
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    self.publish_live_once()
+                    backoff = 1.0
+                    self.stop_event.wait(self.config.live_interval_seconds)
+                except Exception as exc:
+                    print(
+                        f"边缘实时状态暂时失败：{exc}；"
+                        f"{backoff:.0f}秒后重试。",
+                        flush=True,
+                    )
+                    self.stop_event.wait(backoff)
+                    backoff = min(30.0, backoff * 2.0)
+        finally:
+            self.stop_event.set()
+            stats_thread.join(timeout=2.0)
         return 0
 
 
